@@ -1,0 +1,14 @@
+# Ignore the virtual environment
+.venv/
+
+# Ignore all training checkpoints
+**/checkpoint-*/
+
+
+# Ignore heavy model weights and optimizer states
+*.safetensors
+*.pt
+*.bin
+*.onnx
+models/
+
