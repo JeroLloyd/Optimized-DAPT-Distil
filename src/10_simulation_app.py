@@ -2,288 +2,325 @@ import streamlit as st
 import onnxruntime as ort
 import numpy as np
 import os
+import sys
 import time
 import pandas as pd
 import torch
 import matplotlib.pyplot as plt
-import seaborn as sns
+import platform
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from scipy.special import softmax
+from scipy.interpolate import make_interp_spline
 
-# --- PAGE CONFIGURATION (MUST BE FIRST) ---
+# --- CONFIG IMPORT ---
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+try:
+    import config
+except ImportError:
+    st.error("CRITICAL ERROR: Could not import 'config.py'. Ensure this script is in the /src folder.")
+    st.stop()
+
+# --- PAGE CONFIG ---
 st.set_page_config(
-    page_title="Thesis Simulation Platform",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Thesis Benchmark Platform",
+    layout="wide"
 )
 
-# --- CUSTOM CSS ---
+# --- DARK HCI CSS ---
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #1E1E1E;
-        border: 1px solid #333;
-        padding: 20px;
-        border-radius: 10px;
-        text-align: center;
-        margin-bottom: 10px;
-    }
-    .highlight-card {
-        border: 2px solid #4CAF50;
-        background-color: #1a2e1a;
-    }
-    div.stButton > button {
-        width: 100%;
-        background-color: #4CAF50;
-        color: white;
-        height: 50px;
-        font-size: 18px;
-    }
+.metric-card { background-color: #1E1E1E; border-radius: 12px; padding: 18px; border: 1px solid #333; }
+.training-box { 
+    border: 1px solid #444; border-radius: 10px; padding: 15px; background: #0E1117; min-height: 480px;
+    transition: all 0.5s ease;
+}
+.stage-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;}
+.active-stage { border: 2px solid #4CAF50 !important; background: #1a2e1a !important; box-shadow: 0 0 15px rgba(76, 175, 80, 0.2); }
+.completed-stage { border: 1px solid #4CAF50; opacity: 0.8; }
+.data-preview { font-family: monospace; font-size: 11px; background: #000; padding: 10px; border-radius: 5px; color: #00FF00; height: 100px; overflow-y: auto; }
+.stMetric { color: white !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONFIGURATION ---
+# ----------------------------------------------------
+# MODEL REGISTRY
+# ----------------------------------------------------
 MODELS = {
-    "Model A": {"name": "Base DistilBERT", "path": "models/model_a_base", "type": "pytorch"},
-    "Model B": {"name": "DAPT-DistilBERT", "path": "models/model_b_dapt_finetuned", "type": "pytorch"},
-    "Model C": {"name": "XLM-RoBERTa", "path": "models/model_c_xlmr", "type": "pytorch"},
-    "Model D": {"name": "Optimized ONNX", "path": "models/model_d_optimized/model_quantized.onnx", "tokenizer": "models/model_d_optimized", "type": "onnx"}
+    "Model A": {"name": "Base DistilBERT", "path": config.MODEL_A_DIR, "type": "pytorch"},
+    "Model B": {"name": "DAPT-DistilBERT", "path": config.MODEL_B_FINETUNED_DIR, "type": "pytorch"},
+    "Model C": {"name": "XLM-RoBERTa", "path": config.MODEL_C_DIR, "type": "pytorch"},
+    "Model D": {
+        "name": "Optimized ONNX",
+        "path": os.path.join(config.MODEL_D_DIR, "model_quantized.onnx"),
+        "tokenizer": config.MODEL_D_DIR,
+        "type": "onnx"
+    }
 }
 
-RESULTS_PATH = "results/metrics_summary.csv"
+RESULTS_PATH = os.path.join(config.BASE_DIR, "results", "metrics_summary.csv")
 
-# --- LOAD RESOURCES ---
+# ----------------------------------------------------
+# RESOURCE LOADERS
+# ----------------------------------------------------
 @st.cache_resource
 def load_one_model(key):
-    config = MODELS[key]
-    path = config["path"]
-    tok_path = config.get("tokenizer", path)
+    model_conf = MODELS[key]
+    path, tok_path = model_conf["path"], model_conf.get("tokenizer", model_conf["path"])
+    if not os.path.exists(path): return None, None, "error"
     tokenizer = AutoTokenizer.from_pretrained(tok_path)
-    
-    if config["type"] == "onnx":
-        model = ort.InferenceSession(path)
+    if model_conf["type"] == "onnx":
+        options = ort.SessionOptions()
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        model = ort.InferenceSession(path, options, providers=["CPUExecutionProvider"])
         return tokenizer, model, "onnx"
-    else:
-        model = AutoModelForSequenceClassification.from_pretrained(path)
-        model.eval()
-        return tokenizer, model, "pytorch"
+    model = AutoModelForSequenceClassification.from_pretrained(path)
+    model.eval(); model.to("cpu")
+    return tokenizer, model, "pytorch"
 
 @st.cache_data
 def load_thesis_metrics():
     if os.path.exists(RESULTS_PATH):
-        return pd.read_csv(RESULTS_PATH)
+        df = pd.read_csv(RESULTS_PATH)
+        df.columns = [c.strip() for c in df.columns]
+        return df
     return None
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Controls")
-    # NEW MODE ADDED HERE
-    mode = st.radio("Select Mode", ["Grand Benchmark", "Pipeline Inspector", "Thesis Analytics"])
+def compute_research_metrics(df):
+    baseline = df.loc[df["Macro_F1"].idxmax()]
+    df["Speedup_Factor"] = baseline["Latency_ms"] / df["Latency_ms"]
+    df["Performance_Retention"] = (df["Macro_F1"] / baseline["Macro_F1"]) * 100
+    df["Efficiency_Score"] = df["Macro_F1"] / df["Latency_ms"]
     
-    st.info("""
-    **Mode Guide:**
-    * **Grand Benchmark:** Race all models live.
-    * **Pipeline Inspector:** See tokens & logic.
-    * **Thesis Analytics:** View validation data (F1, Speedup).
-    """)
+    pareto_flags = []
+    for i, row in df.iterrows():
+        dominated = False
+        for j, other in df.iterrows():
+            if (other["Latency_ms"] <= row["Latency_ms"] and other["Macro_F1"] >= row["Macro_F1"] and j != i):
+                dominated = True; break
+        pareto_flags.append(not dominated)
+    df["Pareto_Optimal"] = pareto_flags
+    return df
 
-# --- TITLE AREA ---
+# ----------------------------------------------------
+# ACADEMIC PARETO CHART (REAL DATA)
+# ----------------------------------------------------
+def plot_pareto_with_indicator(df):
+    plt.style.use('default') 
+    fig, ax = plt.subplots(figsize=(12, 8), dpi=300)
+    ax.set_facecolor('white'); fig.patch.set_facecolor('white')
+    df_plot = df.copy().sort_values("Latency_ms")
+    x, y = df_plot["Latency_ms"].values, df_plot["Macro_F1"].values
+    ax.set_xlim(0, 160); ax.set_xticks(range(0, 161, 20))
+    ax.set_ylim(0.8140, 0.8360); ax.set_yticks(np.arange(0.8140, 0.8361, 0.002))
+    ax.grid(True, linestyle='-', color='#E0E0E0', linewidth=0.6, zorder=0)
+    ax.set_xlabel("Inference Latency (ms)", fontsize=13, fontweight='bold')
+    ax.set_ylabel("Macro F1 Score", fontsize=13, fontweight='bold')
+    ax.axvspan(0, 20, color='#D4EDDA', alpha=0.4, zorder=1)
+    ax.text(10, 0.8355, "Real-Time Deployment Zone (<20ms)", ha='center', va='top', fontsize=11, color='#155724', fontweight='bold', zorder=5)
+
+    if len(x) > 2:
+        x_smooth = np.linspace(x.min(), x.max(), 300)
+        spline = make_interp_spline(x, y, k=2)
+        ax.plot(x_smooth, spline(x_smooth), color='#003366', linewidth=3.5, zorder=2)
+    else:
+        ax.plot(x, y, color='#003366', linewidth=3.5, zorder=2)
+    
+    for _, row in df_plot.iterrows():
+        is_proposed = "Optimized" in row["Model_Name"]
+        color, marker = ('red', 'D') if is_proposed else ('#002366', 'o')
+        ax.scatter(row["Latency_ms"], row["Macro_F1"], color=color, marker=marker, s=200 if is_proposed else 150, zorder=6, edgecolors='black' if is_proposed else 'white')
+        
+        if is_proposed: label, xy_off, conn = "PROPOSED MODEL", (25, -40), "arc3,rad=-0.1"
+        elif "XLM" in row["Model_Name"]: label, xy_off, conn = "XLM-RoBERTa (Teacher)", (-50, 30), "arc3,rad=0.1"
+        elif "DAPT" in row["Model_Name"]: label, xy_off, conn = "DAPT-DistilBERT", (30, 20), "arc3,rad=-0.2"
+        else: label, xy_off, conn = "Base DistilBERT", (-60, -35), "arc3,rad=0.2"
+
+        ax.annotate(label, xy=(row["Latency_ms"], row["Macro_F1"]), xytext=xy_off, textcoords='offset points', 
+                    fontsize=10, color=color, fontweight='bold', arrowprops=dict(arrowstyle='->', color='black', lw=1.2, connectionstyle=conn), zorder=10)
+
+    ax.set_title("Latency–Accuracy Pareto Frontier for Deployment-Aware NLP", fontsize=16, fontweight='bold', pad=25)
+    st.pyplot(fig)
+
+# ----------------------------------------------------
+# TRAINING ARCHITECTURE VISUALIZATION
+# ----------------------------------------------------
+def render_training_simulation():
+    st.header("Model Training Architecture & Lifecycle")
+    st.caption("Visualizing the side-by-side progression from raw Taglish data to Optimized ONNX graphs.")
+    
+    # Sample data based on your datasets
+    raw_samples = [
+        "Ang ganda ng item na to, worth it bilhin!",
+        "Medyo matagal ang delivery but okay naman.",
+        "Worst experience ever. Scammer ang seller.",
+        "Sulit na sulit ang bayad. 5 stars."
+    ]
+    
+    if st.button(" INITIATE PARALLEL TRAINING PIPELINE"):
+        cols = st.columns(4)
+        placeholders = [cols[i].empty() for i in range(4)]
+        
+        epochs = 15
+        for step in range(epochs):
+            progress = (step + 1) / epochs
+            
+            for i, (key, meta) in enumerate(MODELS.items()):
+                # Simulation Data Logic
+                base_loss = 0.9 / (step + 1)
+                base_acc = 0.5 + (0.32 * progress)
+                
+                # Model-specific variations
+                if key == "Model C": base_acc += 0.02 
+                if key in ["Model B", "Model D"]: base_loss *= 0.85 # DAPT converging faster
+                
+                with placeholders[i].container():
+                    st.markdown(f"### {key}")
+                    st.caption(meta['name'])
+                    
+                    # STAGE 1: DATA PIPELINE (Ref: 02_data_cleaning_dapt.py)
+                    s1_active = progress < 0.25
+                    s1_class = "active-stage" if s1_active else "completed-stage"
+                    
+                    sample_text = raw_samples[step % 4]
+                    if not s1_active: sample_text = sample_text.lower().replace(",", "") # Simple clean simulation
+                    
+                    st.markdown(f"""<div class='training-box {s1_class}'>
+                        <p class='stage-label'>Stage 1: Pre-processing</p>
+                        <b>Active Logic:</b> 02_data_cleaning_dapt.py<br>
+                        <div class='data-preview'><b>Data Stream:</b><br>{sample_text}</div>
+                        <small>Cleaning Taglish nuances...</small>
+                    """, unsafe_allow_html=True)
+                    
+                    # STAGE 2: KNOWLEDGE INTAKE (Ref: 04_train_stage1_dapt.py, 05_train_stage2_finetune.py)
+                    s2_active = progress >= 0.25 and progress < 0.85
+                    s2_class = "active-stage" if s2_active else ("completed-stage" if progress >= 0.85 else "")
+                    
+                    dapt_status = " DAPT ACTIVE" if key in ["Model B", "Model D"] else "❌ Standard"
+                    trainer = "WeightedTrainer" if key != "Model A" else "DefaultTrainer"
+                    
+                    st.markdown(f"""<div style='margin-top:10px;'>
+                        <p class='stage-label'>Stage 2: Training / DAPT</p>
+                        <b>DAPT Status:</b> {dapt_status}<br>
+                        <b>Loss:</b> {base_loss + np.random.normal(0, 0.01):.4f}<br>
+                        <b>F1-Score:</b> {base_acc + np.random.normal(0, 0.005):.4f}<br>
+                        <progress value='{progress}' max='1' style='width:100%'></progress>
+                    </div>""", unsafe_allow_html=True)
+
+                    # STAGE 3: HARDWARE OPTIMIZATION (Ref: 06_optimize_stage3_model_d.py)
+                    s3_active = progress >= 0.85
+                    s3_class = "active-stage" if s3_active and key == "Model D" else ""
+                    
+                    arch = " AVX-512 VNNI" if key == "Model D" else "N/A (PyTorch FP32)"
+                    status_msg = "Optimizing Graph..." if s3_active and key == "Model D" else "Waiting..."
+                    if progress >= 0.95 and key == "Model D": status_msg = "Model D Ready (ONNX)"
+                    
+                    st.markdown(f"""<div style='margin-top:10px;'>
+                        <p class='stage-label'>Stage 3: Optimization</p>
+                        <b>Architecture:</b> {arch}<br>
+                        <b>State:</b> {status_msg}<br>
+                    </div></div>""", unsafe_allow_html=True)
+                    
+            time.sleep(0.8) # Slowed for observation
+
+# ----------------------------------------------------
+# SIDEBAR NAVIGATION
+# ----------------------------------------------------
+with st.sidebar:
+    st.header("System Controls")
+    mode = st.radio("Select View", ["Research Dashboard", "Live Benchmark", "Training Architecture", "Pipeline Inspector"])
+    st.divider()
+    st.info(f"**Host Hardware:**\n{platform.processor()}\n\n**Acceleration:**\nAVX-512 VNNI (Model D Only)")
+
+# ----------------------------------------------------
+# MAIN ROUTING LOGIC
+# ----------------------------------------------------
 st.title("Thesis Simulation Platform")
 
-# --- SHARED INPUT AREA (Only for Live Modes) ---
-if mode in ["Grand Benchmark", "Pipeline Inspector"]:
-    if mode == "Grand Benchmark":
-        st.markdown("### Real-Time Model Comparison")
-    else:
-        st.markdown("### Single Model Deep Dive")
+if mode == "Research Dashboard":
+    st.header("Optimized-DAPT DistillmBERT Evaluation")
+    df_static = load_thesis_metrics()
+    if df_static is None:
+        st.warning("metrics_summary.csv not found."); st.stop()
+    
+    df_static = compute_research_metrics(df_static)
+    proposed = df_static.loc[df_static["Model_Name"].str.contains("Optimized", case=False)].iloc[0]
 
-    st.write("---")
-    col_input, col_btn = st.columns([3, 1])
-    with col_input:
-        default_text = "Sobrang sulit ng item na to, ang bilis pa ng delivery!"
-        user_input = st.text_area("Input Sample (Taglish)", default_text, height=100, label_visibility="collapsed")
-    with col_btn:
-        st.write("") 
-        st.write("") 
-        run_btn = st.button("RUN SIMULATION")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Macro F1", f"{proposed['Macro_F1']:.4f}")
+    c2.metric("Latency", f"{proposed['Latency_ms']:.2f} ms")
+    c3.metric("Model Size", f"{proposed['Model_Size_MB']:.1f} MB")
+    c4.metric("Speedup", f"{proposed['Speedup_Factor']:.2f}x")
+    c5.metric("Retention", f"{proposed['Performance_Retention']:.2f}%")
 
-# =========================================================
-# MODE 1: GRAND BENCHMARK
-# =========================================================
-if mode == "Grand Benchmark":
-    if run_btn:
-        results = []
-        progress_bar = st.progress(0)
+    st.subheader("Pareto Frontier — Deployment Perspective")
+    plot_pareto_with_indicator(df_static)
+
+elif mode == "Training Architecture":
+    render_training_simulation()
+
+elif mode == "Live Benchmark":
+    st.header("Real-Time Multi-Run Benchmark")
+    text = st.text_area("Input Text (Taglish)", "Sobrang sulit ng item na to, ang bilis pa ng delivery!")
+    if st.button("START BENCHMARK"):
+        # Stage 1: Scanning
+        st.subheader(" Stage 1: Lexical Scanning")
+        pipeline_status = st.empty()
+        tokenizer, _, _ = load_one_model("Model D")
+        tokens = tokenizer.tokenize(text)
+        token_ids = tokenizer.convert_tokens_to_ids(tokens)
         
-        for i, (key, config) in enumerate(MODELS.items()):
+        words = text.split(); current_view = ""
+        for word in words:
+            current_view += f" <span style='color:#4CAF50; font-weight:bold;'>{word}</span>"
+            pipeline_status.markdown(f"<div style='padding:15px; border-left:5px solid #4CAF50; background:#1a1a1a;'><b>Reading:</b> {current_view}</div>", unsafe_allow_html=True)
+            time.sleep(0.5)
+
+        # Stage 2: Vectorization
+        st.subheader(" Stage 2: Numerical Vectorization")
+        t_cols = st.columns(min(len(tokens), 8))
+        for i, t in enumerate(tokens[:8]):
+            with t_cols[i]:
+                st.markdown(f"<div style='text-align:center;'>{t}<br>↓<br><b style='background:#1a2e1a; padding:2px;'>{token_ids[i]}</b></div>", unsafe_allow_html=True)
+                time.sleep(0.4)
+
+        # Stage 3: Inference
+        st.subheader(" Stage 3: Multi-Trial Inference")
+        progress_bar = st.progress(0); results = []
+        for idx, key in enumerate(MODELS.keys()):
             tokenizer, model, engine = load_one_model(key)
-            start_t = time.time()
+            if engine == "error": continue
+            def run_inf(t, m, e, txt):
+                ins = t(txt, return_tensors="pt" if e == "pytorch" else "np", padding=True, truncation=True, max_length=128)
+                if e == "onnx": return m.run(None, {k: v.astype(np.int64) for k, v in ins.items()})[0][0]
+                else: 
+                    ins = {k: v.to("cpu") for k, v in ins.items()}
+                    with torch.no_grad(): return m(**ins).logits[0].numpy()
             
-            inputs = tokenizer(user_input, return_tensors="pt" if engine == "pytorch" else "np", padding=True, truncation=True)
-            if engine == "onnx":
-                ort_inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
-                logits = model.run(None, ort_inputs)[0][0]
-            else:
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                logits = outputs.logits[0].numpy()
+            for _ in range(3): run_inf(tokenizer, model, engine, text) # Warmup
+            latencies = []
+            for _ in range(15):
+                t1 = time.perf_counter()
+                logits = run_inf(tokenizer, model, engine, text)
+                latencies.append((time.perf_counter() - t1) * 1000)
+                time.sleep(0.05)
             
-            latency = (time.time() - start_t) * 1000
             probs = softmax(logits)
-            pred_id = np.argmax(probs)
-            labels = ["Negative", "Neutral", "Positive"]
-            
-            results.append({
-                "ID": key,
-                "Name": config["name"],
-                "Prediction": labels[pred_id],
-                "Confidence": probs[pred_id],
-                "Latency": latency
-            })
-            progress_bar.progress((i + 1) / 4)
-        
-        progress_bar.empty()
+            results.append({"Model": key, "Latency (ms)": np.mean(latencies), "Prediction": ["Negative", "Neutral", "Positive"][np.argmax(probs)], "Confidence": f"{np.max(probs)*100:.1f}%"})
+            progress_bar.progress((idx + 1) / 4)
+        st.table(pd.DataFrame(results))
 
-        # Display Cards
-        st.write("### Live Results")
-        cols = st.columns(4)
-        fastest_model = min(results, key=lambda x: x['Latency'])['ID']
-
-        for i, res in enumerate(results):
-            with cols[i]:
-                sentiment_color = "#FF5252" if res['Prediction'] == "Negative" else "#4CAF50" if res['Prediction'] == "Positive" else "#FFC107"
-                border_style = "2px solid #4CAF50" if res['ID'] == fastest_model else "1px solid #333"
-                bg_color = "#1a2e1a" if res['ID'] == fastest_model else "#1E1E1E"
-                
-                st.markdown(f"""
-                <div style="background-color: {bg_color}; border: {border_style}; padding: 15px; border-radius: 10px; text-align: center;">
-                    <h4 style="margin:0; color: #AAA;">{res['ID']}</h4>
-                    <p style="font-size: 14px; color: #888;">{res['Name']}</p>
-                    <hr style="border-top: 1px solid #444;">
-                    <h2 style="color: {sentiment_color}; margin: 10px 0;">{res['Prediction']}</h2>
-                    <p style="margin: 0;">Conf: <b>{res['Confidence']*100:.1f}%</b></p>
-                    <h3 style="margin: 10px 0; color: white;">{res['Latency']:.2f} ms</h3>
-                </div>
-                """, unsafe_allow_html=True)
-
-        # Comparative Charts
-        st.write("---")
-        chart_col1, chart_col2 = st.columns(2)
-        df_res = pd.DataFrame(results)
-        
-        with chart_col1:
-            st.subheader("Speed Comparison")
-            st.bar_chart(df_res.set_index("Name")["Latency"], color="#4CAF50")
-            
-        with chart_col2:
-            st.subheader("Confidence Comparison")
-            st.bar_chart(df_res.set_index("Name")["Confidence"], color="#2196F3")
-
-# =========================================================
-# MODE 2: PIPELINE INSPECTOR
-# =========================================================
 elif mode == "Pipeline Inspector":
-    selected_model_key = st.selectbox("Select Model to Inspect", list(MODELS.keys()), index=3)
-    
-    if run_btn:
-        config = MODELS[selected_model_key]
-        tokenizer, model, engine = load_one_model(selected_model_key)
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.info("1. Input & Tokenization")
-            inputs = tokenizer(user_input, return_tensors="pt" if engine == "pytorch" else "np", padding=True, truncation=True)
-            input_ids = inputs["input_ids"][0]
-            if engine == "pytorch": input_ids = input_ids.numpy()
-            tokens = tokenizer.convert_ids_to_tokens(input_ids)
-            st.markdown(f"**Tokens Generated:** `{len(tokens)}`")
-            st.code(str(tokens), language="json")
-        
-        with col2:
-            st.warning(f"2. {engine.upper()} Inference Engine")
-            start_t = time.time()
-            if engine == "onnx":
-                ort_inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
-                logits = model.run(None, ort_inputs)[0][0]
-            else:
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                logits = outputs.logits[0].numpy()
-            latency = (time.time() - start_t) * 1000
-            st.markdown(f"**Processing Time:**")
-            st.markdown(f"# {latency:.2f} ms")
-        
-        with col3:
-            st.success("3. Final Classification")
-            probs = softmax(logits)
-            labels = ["Negative", "Neutral", "Positive"]
-            pred_id = np.argmax(probs)
-            color = "red" if pred_id == 0 else "green" if pred_id == 2 else "orange"
-            st.markdown(f"<h2 style='color:{color}; text-align:center;'>{labels[pred_id]}</h2>", unsafe_allow_html=True)
-            st.bar_chart(pd.DataFrame({"Sentiment": labels, "Probability": probs}).set_index("Sentiment"))
-
-# =========================================================
-# MODE 3: THESIS ANALYTICS (NEW)
-# =========================================================
-elif mode == "Thesis Analytics":
-    st.markdown("### Validated Experimental Results")
-    st.markdown("This dashboard displays the **aggregated performance metrics** from the full test dataset (1,000+ samples).")
-    
-    df = load_thesis_metrics()
-    
-    if df is not None:
-        # Get Model D Data
-        model_d = df[df['Model_Name'].str.contains("Optimized")].iloc[0]
-        
-        # 1. KPI Cards
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Model D Accuracy (F1)", f"{model_d['Macro_F1']:.4f}", delta="High Precision")
-        col2.metric("Inference Latency", f"{model_d['Latency_ms']:.2f} ms", delta="-3x Faster", delta_color="normal") # Inverted delta
-        col3.metric("Model Size", f"{model_d['Model_Size_MB']:.1f} MB", delta="-Tiny")
-        col4.metric("Retention Rate", f"94.1%", help="Performance retained compared to XLM-R")
-
-        st.divider()
-
-        # 2. Render the Dual-Axis Chart (Re-creating the Matplotlib logic inside Streamlit)
-        st.subheader("Performance Trade-off: Speed vs. Accuracy")
-        
-        # Prepare Data
-        desired_order = ["Model A Base DistilBERT", "Model B DAPT-DistilBERT", "Model C XLM-RoBERTa", "Model D Optimized DAPT"]
-        df['Sort_Key'] = df['Model_Name'].apply(lambda x: desired_order.index(x) if x in desired_order else 99)
-        df_sorted = df.sort_values('Sort_Key')
-        short_names = ["Model A\n(Base)", "Model B\n(DAPT)", "Model C\n(XLM-R)", "Model D\n(Proposed)"]
-        
-        # Plotting
-        fig, ax1 = plt.subplots(figsize=(10, 5))
-        
-        # Bars
-        colors = ['#bdc3c7', '#bdc3c7', '#95a5a6', '#2ecc71'] 
-        bars = ax1.bar(short_names, df_sorted['Latency_ms'], color=colors, alpha=0.9, width=0.5)
-        ax1.set_ylabel('Latency (ms)', fontweight='bold', color='#34495e')
-        ax1.set_ylim(0, df_sorted['Latency_ms'].max() * 1.3)
-        
-        # Bar Labels
-        for bar in bars:
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height/2, f'{height:.1f} ms', 
-                     ha='center', va='center', color='white', fontweight='bold')
-        
-        # Line
-        ax2 = ax1.twinx()
-        ax2.plot(short_names, df_sorted['Macro_F1'], color='#e74c3c', marker='o', markersize=10, linewidth=3)
-        ax2.set_ylabel('Accuracy (F1)', fontweight='bold', color='#c0392b')
-        ax2.set_ylim(0.70, 0.95)
-        
-        # Line Labels
-        for i, txt in enumerate(df_sorted['Macro_F1']):
-            ax2.annotate(f"{txt:.2f}", (i, txt), xytext=(0, 15), textcoords='offset points', 
-                         ha='center', fontweight='bold', color='#c0392b',
-                         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#e74c3c"))
-            
-        st.pyplot(fig)
-        
-        st.caption("Figure 1: Dual-Axis comparison showing Model D achieving lowest latency (Green Bar) while maintaining competitive accuracy (Red Line).")
-
-    else:
-        st.error("Metrics file not found. Please run src/09_visualize_results.py first.")
+    st.header("Model Pipeline Inspector")
+    selected = st.selectbox("Select Model", list(MODELS.keys()), index=3)
+    text = st.text_area("Input Text", "Sulit ito!")
+    if st.button("INSPECT"):
+        tokenizer, model, engine = load_one_model(selected)
+        inputs = tokenizer(text, return_tensors="pt")
+        st.write("### Tokens")
+        st.code(tokenizer.convert_ids_to_tokens(inputs["input_ids"][0]))
+        # Inference for Inspector
+        ins = tokenizer(text, return_tensors="pt" if engine == "pytorch" else "np", padding=True, truncation=True)
+        if engine == "onnx": logits = model.run(None, {k: v.astype(np.int64) for k, v in ins.items()})[0][0]
+        else:
+            with torch.no_grad(): logits = model(**ins).logits[0].numpy()
+        st.bar_chart(pd.DataFrame({"Probability": softmax(logits)}, index=["Negative", "Neutral", "Positive"]))
