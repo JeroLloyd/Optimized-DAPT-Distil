@@ -105,41 +105,53 @@ def compute_research_metrics(df):
 # ACADEMIC PARETO CHART (REAL DATA)
 # ----------------------------------------------------
 def plot_pareto_with_indicator(df):
-    plt.style.use('default') 
+    plt.style.use("seaborn-v0_8-whitegrid")
     fig, ax = plt.subplots(figsize=(12, 8), dpi=300)
-    ax.set_facecolor('white'); fig.patch.set_facecolor('white')
-    df_plot = df.copy().sort_values("Latency_ms")
-    x, y = df_plot["Latency_ms"].values, df_plot["Macro_F1"].values
-    ax.set_xlim(0, 160); ax.set_xticks(range(0, 161, 20))
-    ax.set_ylim(0.8140, 0.8360); ax.set_yticks(np.arange(0.8140, 0.8361, 0.002))
-    ax.grid(True, linestyle='-', color='#E0E0E0', linewidth=0.6, zorder=0)
+
+    df_plot = df.sort_values("Latency_ms")
+    x = df_plot["Latency_ms"].values
+    y = df_plot["Macro_F1"].values
+
+    # Axis scaling
+    ax.set_xlim(0, max(x) * 1.1)
+    ax.set_ylim(min(y) - 0.005, max(y) + 0.005)
+
     ax.set_xlabel("Inference Latency (ms)", fontsize=13, fontweight='bold')
     ax.set_ylabel("Macro F1 Score", fontsize=13, fontweight='bold')
-    ax.axvspan(0, 20, color='#D4EDDA', alpha=0.4, zorder=1)
-    ax.text(10, 0.8355, "Real-Time Deployment Zone (<20ms)", ha='center', va='top', fontsize=11, color='#155724', fontweight='bold', zorder=5)
 
-    if len(x) > 2:
-        x_smooth = np.linspace(x.min(), x.max(), 300)
-        spline = make_interp_spline(x, y, k=2)
-        ax.plot(x_smooth, spline(x_smooth), color='#003366', linewidth=3.5, zorder=2)
-    else:
-        ax.plot(x, y, color='#003366', linewidth=3.5, zorder=2)
-    
+    # Real-time zone shading
+    ax.axvspan(0, 20, color="#D4EDDA", alpha=0.3)
+    ax.text(10, max(y), "Real-Time Zone (<20ms)",
+            ha='center', fontsize=10, color="#155724")
+
+    # Efficiency iso-lines
+    eff_levels = np.linspace(min(y/x), max(y/x), 4)
+    x_line = np.linspace(1, max(x)*1.1, 200)
+    for eff in eff_levels:
+        ax.plot(x_line, eff * x_line,
+                linestyle='--', linewidth=1,
+                alpha=0.3)
+
+    # Pareto highlight
     for _, row in df_plot.iterrows():
-        is_proposed = "Optimized" in row["Model_Name"]
-        color, marker = ('red', 'D') if is_proposed else ('#002366', 'o')
-        ax.scatter(row["Latency_ms"], row["Macro_F1"], color=color, marker=marker, s=200 if is_proposed else 150, zorder=6, edgecolors='black' if is_proposed else 'white')
-        
-        if is_proposed: label, xy_off, conn = "PROPOSED MODEL", (25, -40), "arc3,rad=-0.1"
-        elif "XLM" in row["Model_Name"]: label, xy_off, conn = "XLM-RoBERTa (Teacher)", (-50, 30), "arc3,rad=0.1"
-        elif "DAPT" in row["Model_Name"]: label, xy_off, conn = "DAPT-DistilBERT", (30, 20), "arc3,rad=-0.2"
-        else: label, xy_off, conn = "Base DistilBERT", (-60, -35), "arc3,rad=0.2"
+        alpha = 1.0 if row["Pareto_Optimal"] else 0.35
+        size = 220 if "Optimized" in row["Model_Name"] else 140
+        color = "red" if "Optimized" in row["Model_Name"] else "#002366"
 
-        ax.annotate(label, xy=(row["Latency_ms"], row["Macro_F1"]), xytext=xy_off, textcoords='offset points', 
-                    fontsize=10, color=color, fontweight='bold', arrowprops=dict(arrowstyle='->', color='black', lw=1.2, connectionstyle=conn), zorder=10)
+        ax.scatter(row["Latency_ms"], row["Macro_F1"],
+                   s=size, alpha=alpha,
+                   color=color, edgecolors="black")
 
-    ax.set_title("Latency–Accuracy Pareto Frontier for Deployment-Aware NLP", fontsize=16, fontweight='bold', pad=25)
+        ax.annotate(row["Model_Name"],
+                    (row["Latency_ms"], row["Macro_F1"]),
+                    xytext=(5,5), textcoords='offset points',
+                    fontsize=9)
+
+    ax.set_title("Deployment-Aware Pareto Frontier",
+                 fontsize=15, fontweight='bold')
+
     st.pyplot(fig)
+
 
 # ----------------------------------------------------
 # TRAINING ARCHITECTURE VISUALIZATION
