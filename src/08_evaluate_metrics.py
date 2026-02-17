@@ -195,7 +195,8 @@ def main():
         output_file = os.path.join(RESULTS_DIR, "final_metrics.csv")
         df_res.to_csv(output_file, index=False)
         print("\nFinal Metrics Table:")
-        print(df_res[["Model Name", "Macro F1 Score", "Avg Latency (ms)", "Model Size (MB)", "Speedup Factor"]].to_string(index=False))
+        # Added "Accuracy" to the list below
+        print(df_res[["Model Name", "Accuracy", "Macro F1 Score", "Avg Latency (ms)", "Model Size (MB)", "Speedup Factor"]].to_string(index=False))
     else:
         print("[WARNING] No results generated.")
 

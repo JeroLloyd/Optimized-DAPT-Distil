@@ -17,48 +17,48 @@ ECHO      Focus: DAPT-DistilBERT & ONNX Optimization
 ECHO ========================================================
 ECHO.
 
-:: --- STEP 1: DATA CLEANING (LAZADA) ---
-ECHO [STEP 1/10] Cleaning Lazada Unlabeled Corpus...
-python src/01_lazada_cleaning_dapt.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 1: DATA CLEANING (LAZADA) ---
+@REM ECHO [STEP 1/10] Cleaning Lazada Unlabeled Corpus...
+@REM python src/01_lazada_cleaning_dapt.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
-:: --- STEP 2: DATA CLEANING (SYNTHETIC) ---
-ECHO.
-ECHO [STEP 2/10] Cleaning Synthetic Corpus (Deduplication)...
-python src/02_synthetic_cleaning_dapt.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 2: DATA CLEANING (SYNTHETIC) ---
+@REM ECHO.
+@REM ECHO [STEP 2/10] Cleaning Synthetic Corpus (Deduplication)...
+@REM python src/02_synthetic_cleaning_dapt.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
-:: --- STEP 3: HYBRID ASSEMBLY ---
-ECHO.
-ECHO [STEP 3/10] Assembling Hybrid Corpus (Lazada + Synthetic)...
-python src/03_hybrid_assembly_dapt.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 3: HYBRID ASSEMBLY ---
+@REM ECHO.
+@REM ECHO [STEP 3/10] Assembling Hybrid Corpus (Lazada + Synthetic)...
+@REM python src/03_hybrid_assembly_dapt.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
-:: --- STEP 4: STRATIFICATION ---
-ECHO.
-ECHO [STEP 4/10] Stratifying FiReCS (80/10/10 Split)...
-python src/04_firecs_stratification.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 4: STRATIFICATION ---
+@REM ECHO.
+@REM ECHO [STEP 4/10] Stratifying FiReCS (80/10/10 Split)...
+@REM python src/04_firecs_stratification.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
-:: --- STEP 5: DAPT TRAINING ---
-ECHO.
-ECHO [STEP 5/10] Stage 1: Domain-Adaptive Pre-Training (Model B Base)...
-ECHO (This will take time. Training on Hybrid Corpus...)
-python src/05_train_stage1_dapt.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 5: DAPT TRAINING ---
+@REM ECHO.
+@REM ECHO [STEP 5/10] Stage 1: Domain-Adaptive Pre-Training (Model B Base)...
+@REM ECHO (This will take time. Training on Hybrid Corpus...)
+@REM python src/05_train_stage1_dapt.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
-:: --- STEP 6: FINE-TUNING ---
-ECHO.
-ECHO [STEP 6/10] Stage 2: Supervised Fine-Tuning...
-ECHO (Training Model A, Model B, and Model C sequentially...)
-python src/06_train_stage2_finetune.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 6: FINE-TUNING ---
+@REM ECHO.
+@REM ECHO [STEP 6/10] Stage 2: Supervised Fine-Tuning...
+@REM ECHO (Training Model A, Model B, and Model C sequentially...)
+@REM python src/06_train_stage2_finetune.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
-:: --- STEP 7: OPTIMIZATION ---
-ECHO.
-ECHO [STEP 7/10] Stage 3: Creating Model D (ONNX Quantization)...
-python src/07_optimize_stage3_model_d.py
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR
+@REM :: --- STEP 7: OPTIMIZATION ---
+@REM ECHO.
+@REM ECHO [STEP 7/10] Stage 3: Creating Model D (ONNX Quantization)...
+@REM python src/07_optimize_stage3_model_d.py
+@REM IF %ERRORLEVEL% NEQ 0 GOTO ERROR
 
 :: --- STEP 8: EVALUATION ---
 ECHO.

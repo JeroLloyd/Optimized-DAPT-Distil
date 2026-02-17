@@ -30,7 +30,7 @@ def set_professional_style():
 
 def generate_visualizations():
     print("="*60)
-    print("[STEP 10] Generating FINAL Thesis Visualizations (REAL DATA ONLY)")
+    print("[STEP 10] Generating FINAL Thesis Visualizations & Source Data")
     print("="*60)
 
     # 1. Load Data
@@ -49,7 +49,6 @@ def generate_visualizations():
         print(f"[WARNING] {BENCHMARK_PATH} missing. Relying on Script 08 metrics.")
 
     # --- FIX: ROBUST COLUMN MAPPING & DEDUPLICATION ---
-    # We rename columns one by one to avoid collisions
     rename_map = {
         "Macro F1 Score": "Macro_F1",
         "Avg Latency (ms)": "Latency_ms",
@@ -58,14 +57,11 @@ def generate_visualizations():
     df = df.rename(columns=rename_map)
 
     # Handle Storage_MB collision safely
-    # If "Storage_MB" exists (from benchmark) AND "Model Size (MB)" exists (from metrics)
     if "Model Size (MB)" in df.columns:
         if "Storage_MB" in df.columns:
-            # We have both. Prefer 'Model Size (MB)' from metrics as primary, fill with Benchmark.
             df["Storage_MB"] = df["Model Size (MB)"].fillna(df["Storage_MB"])
             df = df.drop(columns=["Model Size (MB)"])
         else:
-            # Only metrics has it, just rename
             df = df.rename(columns={"Model Size (MB)": "Storage_MB"})
     
     # --- CALCULATE DERIVED METRICS ---
@@ -73,12 +69,10 @@ def generate_visualizations():
         best_f1 = df['Macro_F1'].max()
         df['Retention_Pct'] = (df['Macro_F1'] / best_f1) * 100
     
-    # Recalculate Speedup if missing (Relative to slowest model)
     if "Latency_ms" in df.columns and "Speedup" not in df.columns:
         baseline_lat = df['Latency_ms'].max()
         df['Speedup'] = baseline_lat / df['Latency_ms']
 
-    # Short names for cleaner plots
     df['Short_Name'] = df['Model Name'].apply(lambda x: x.replace("Model ", "").replace("DistilBERT", "Distil"))
     
     set_professional_style()
@@ -86,20 +80,23 @@ def generate_visualizations():
     def get_colors(names, highlight_color='#27ae60'):
         return ['#7f8c8d' if 'Optimized' not in x else highlight_color for x in names]
 
-    # --- PLOTTING FUNCTIONS ---
+    # --- PLOTTING & CSV GENERATION ---
     
     # 1. Macro F1
     if "Macro_F1" in df.columns:
+        # Save Source Data CSV
+        csv_path = os.path.join(FIGURES_DIR, "1_macro_f1_score.csv")
+        df[["Model Name", "Short_Name", "Macro_F1"]].to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
+
+        # Generate Plot
         plt.figure(figsize=(10, 6))
-        # Fixed: Added hue and legend=False to silence warning
         ax = sns.barplot(
             x="Short_Name", y="Macro_F1", data=df, 
             hue="Short_Name", palette=get_colors(df['Model Name']), legend=False
         )
         plt.title("Model Accuracy (Macro F1 Score)", fontsize=16, fontweight='bold', pad=20)
         plt.ylabel("Macro F1")
-        
-        # Dynamic Y-lim to show differences clearly
         min_f1 = df['Macro_F1'].min()
         plt.ylim(min_f1 * 0.95, 1.0) 
         
@@ -109,13 +106,18 @@ def generate_visualizations():
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
         plt.savefig(os.path.join(FIGURES_DIR, "1_macro_f1_score.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        print("Saved Fig 1.")
+        print("Saved Image: 1_macro_f1_score.png")
 
     # 2. Latency
     if "Latency_ms" in df.columns:
+        # Save Source Data CSV
+        csv_path = os.path.join(FIGURES_DIR, "2_inference_latency.csv")
+        df[["Model Name", "Short_Name", "Latency_ms"]].to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
+
+        # Generate Plot
         plt.figure(figsize=(10, 6))
         colors = ['#95a5a6' if 'Optimized' not in x else '#2ecc71' for x in df['Model Name']]
-        # Fixed: Added hue and legend=False
         ax = sns.barplot(
             x="Short_Name", y="Latency_ms", data=df, 
             hue="Short_Name", palette=colors, legend=False
@@ -128,12 +130,17 @@ def generate_visualizations():
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
         plt.savefig(os.path.join(FIGURES_DIR, "2_inference_latency.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        print("Saved Fig 2.")
+        print("Saved Image: 2_inference_latency.png")
 
     # 3. Model Size
     if "Storage_MB" in df.columns:
+        # Save Source Data CSV
+        csv_path = os.path.join(FIGURES_DIR, "3_model_size.csv")
+        df[["Model Name", "Short_Name", "Storage_MB"]].to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
+
+        # Generate Plot
         plt.figure(figsize=(10, 6))
-        # Fixed: Added hue and legend=False
         ax = sns.barplot(
             x="Short_Name", y="Storage_MB", data=df, 
             hue="Short_Name", palette=get_colors(df['Model Name']), legend=False
@@ -146,14 +153,19 @@ def generate_visualizations():
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
         plt.savefig(os.path.join(FIGURES_DIR, "3_model_size.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        print("Saved Fig 3.")
+        print("Saved Image: 3_model_size.png")
     else:
         print("[SKIP] Fig 3 skipped (No storage data found).")
 
     # 4. Speedup
     if "Speedup" in df.columns:
+        # Save Source Data CSV
+        csv_path = os.path.join(FIGURES_DIR, "4_speedup_factor.csv")
+        df[["Model Name", "Short_Name", "Speedup"]].to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
+
+        # Generate Plot
         plt.figure(figsize=(10, 6))
-        # Fixed: Added hue and legend=False
         ax = sns.barplot(
             x="Short_Name", y="Speedup", data=df, 
             hue="Short_Name", palette=get_colors(df['Model Name'], '#8e44ad'), legend=False
@@ -167,30 +179,42 @@ def generate_visualizations():
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
         plt.savefig(os.path.join(FIGURES_DIR, "4_speedup_factor.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        print("Saved Fig 4.")
+        print("Saved Image: 4_speedup_factor.png")
 
     # 5. Retention
     if "Retention_Pct" in df.columns:
+        # Save Source Data CSV
+        csv_path = os.path.join(FIGURES_DIR, "5_performance_retention.csv")
+        df[["Model Name", "Short_Name", "Retention_Pct"]].to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
+
+        # Generate Plot
         plt.figure(figsize=(10, 6))
-        # Fixed: Added hue and legend=False
         ax = sns.barplot(
             x="Short_Name", y="Retention_Pct", data=df, 
             hue="Short_Name", palette=get_colors(df['Model Name'], '#2980b9'), legend=False
         )
         plt.title("Accuracy Retention", fontsize=16, fontweight='bold', pad=20)
         plt.ylabel("Retention (%)")
-        plt.ylim(90, 105) # Adjusted for high retention
+        plt.ylim(90, 105) 
         for p in ax.patches:
              if p.get_height() > 0:
                 ax.annotate(f'{p.get_height():.1f}%', (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
         plt.savefig(os.path.join(FIGURES_DIR, "5_performance_retention.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        print("Saved Fig 5.")
+        print("Saved Image: 5_performance_retention.png")
 
     # 6. Pareto Frontier
     if "Latency_ms" in df.columns and "Macro_F1" in df.columns:
         df_pareto = df.copy().sort_values("Latency_ms")
+        
+        # Save Source Data CSV (Sorted)
+        csv_path = os.path.join(FIGURES_DIR, "6_pareto_frontier.csv")
+        df_pareto[["Model Name", "Short_Name", "Latency_ms", "Macro_F1"]].to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
+
+        # Generate Plot
         x = df_pareto["Latency_ms"].values
         y = df_pareto["Macro_F1"].values
 
@@ -198,7 +222,6 @@ def generate_visualizations():
         ax.axvspan(0, 15, color='#f0f9f1', alpha=0.8, zorder=1)
         ax.text(8, min(y) * 0.99, "Real-Time Zone\n(<15ms)", ha='center', fontsize=11, color='#155724', fontweight='bold')
 
-        # Smooth curve if enough points, else straight lines
         if len(x) > 2:
             try:
                 spline = make_interp_spline(x, y, k=2) 
@@ -225,9 +248,9 @@ def generate_visualizations():
 
         plt.savefig(os.path.join(FIGURES_DIR, "6_pareto_frontier.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        print("Saved Fig 6.")
+        print("Saved Image: 6_pareto_frontier.png")
 
-    print(f"\n[COMPLETE] All valid figures saved to: {FIGURES_DIR}")
+    print(f"\n[COMPLETE] Figures and 6 separate CSV files saved to: {FIGURES_DIR}")
 
 if __name__ == "__main__":
     generate_visualizations()

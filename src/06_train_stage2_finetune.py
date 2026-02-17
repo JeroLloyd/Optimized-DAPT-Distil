@@ -1,4 +1,3 @@
-# FILE: 06_train_stage2_finetune.py
 import os
 import pandas as pd
 import numpy as np
@@ -79,7 +78,8 @@ def train_model(config, tokenized_datasets, tokenizer):
     
     training_args = TrainingArguments(
         output_dir=config['output_dir'],
-        evaluation_strategy="epoch",
+        # FIXED: evaluation_strategy -> eval_strategy
+        eval_strategy="epoch",
         save_strategy="epoch",
         learning_rate=config['learning_rate'],
         per_device_train_batch_size=config['batch_size'],
@@ -106,25 +106,76 @@ def train_model(config, tokenized_datasets, tokenizer):
     trainer.save_model(config['output_dir'])
     tokenizer.save_pretrained(config['output_dir'])
 
+def normalize_columns(df):
+    """Normalize column names to standard 'text' and 'label'."""
+    df.columns = [c.lower().strip() for c in df.columns]
+    
+    # 1. Normalize Text Column
+    text_candidates = ['review', 'text', 'content', 'sentence', 'body']
+    for candidate in text_candidates:
+        if candidate in df.columns:
+            df = df.rename(columns={candidate: 'text'})
+            break
+    
+    if 'text' not in df.columns:
+        raise ValueError(f"Could not find text column. Available: {df.columns}")
+
+    # 2. Normalize Label/Sentiment Column
+    label_candidates = ['sentiment', 'label', 'target', 'class']
+    label_col = None
+    for candidate in label_candidates:
+        if candidate in df.columns:
+            label_col = candidate
+            break
+    
+    if not label_col:
+        raise ValueError(f"Could not find label column. Available: {df.columns}")
+
+    # 3. Map Labels if they are strings
+    first_val = df[label_col].iloc[0]
+    if isinstance(first_val, str):
+        label_map = {'negative': 0, 'neutral': 1, 'positive': 2}
+        # Handle potential capitalization
+        df['label'] = df[label_col].astype(str).str.lower().map(label_map)
+        
+        # Check for unmapped values
+        if df['label'].isnull().any():
+            print(f"[WARNING] Some labels could not be mapped. Unique values in '{label_col}': {df[label_col].unique()}")
+            df = df.dropna(subset=['label']) # Safe drop
+            df['label'] = df['label'].astype(int)
+    else:
+        # Assume already integer
+        df['label'] = df[label_col].astype(int)
+    
+    return df[['text', 'label']]
+
 def main():
     print(f"Project Root: {BASE_DIR}")
     train_path = os.path.join(DATA_DIR, 'train.csv')
     val_path = os.path.join(DATA_DIR, 'val.csv')
     
+    if not os.path.exists(train_path):
+        print(f"[ERROR] Data missing: {train_path}")
+        return
+
+    print("Loading datasets...")
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
     
-    if 'review' in train_df.columns:
-        train_df = train_df.rename(columns={'review': 'text'})
-        val_df = val_df.rename(columns={'review': 'text'})
-    
-    label_map = {'negative': 0, 'neutral': 1, 'positive': 2}
-    train_df['label'] = train_df['sentiment'].map(label_map)
-    val_df['label'] = val_df['sentiment'].map(label_map)
+    # --- ROBUST NORMALIZATION ---
+    print("Normalizing columns...")
+    try:
+        train_df = normalize_columns(train_df)
+        val_df = normalize_columns(val_df)
+    except ValueError as e:
+        print(f"[ERROR] Data format issue: {e}")
+        return
+
+    print(f"Training on {len(train_df)} samples, Validating on {len(val_df)} samples.")
     
     raw_datasets = DatasetDict({
-        "train": Dataset.from_pandas(train_df[['text', 'label']]),
-        "validation": Dataset.from_pandas(val_df[['text', 'label']])
+        "train": Dataset.from_pandas(train_df),
+        "validation": Dataset.from_pandas(val_df)
     })
 
     for config in TRAINING_CONFIGS:
@@ -135,6 +186,12 @@ def main():
         else:
             tokenizer_source = "distilbert-base-multilingual-cased"
             
+        # Ensure tokenizer source exists
+        if not os.path.exists(tokenizer_source) and '/' in tokenizer_source and not tokenizer_source.count('/') == 1: 
+             # It's a path that doesn't exist, revert to base to avoid crash
+             print(f"[WARNING] Tokenizer path {tokenizer_source} not found. Fallback to base.")
+             tokenizer_source = "distilbert-base-multilingual-cased"
+
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
 
         def tokenize_function(examples):

@@ -1,0 +1,5 @@
+Model Name,Short_Name,Latency_ms
+Base DistilBERT,Base Distil,31.462349332059173
+DAPT-DistilBERT,DAPT-Distil,33.72070830152833
+XLM-R Base,XLM-R Base,56.94890868320439
+Optimized DAPT,Optimized DAPT,3.917804675574491
