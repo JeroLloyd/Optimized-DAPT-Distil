@@ -1,5 +1,0 @@
-Macro_F1,Accuracy,Latency_ms,Model_Size_MB,Model_ID,Model_Name,Speedup_Factor
-0.8176,0.8139,86.3,519.98,Model A,Base DistilBERT,1.58
-0.8199,0.8177,100.48,519.99,Model B,DAPT-DistilBERT,1.36
-0.8338,0.8302,136.36,1076.98,Model C,XLM-RoBERTa,1.0
-0.8154,0.813,10.76,129.65,Model D,Optimized DAPT,12.67
