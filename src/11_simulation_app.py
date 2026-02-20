@@ -27,7 +27,7 @@ RESULTS_PATH = os.path.join(RESULTS_DIR, "final_metrics.csv")
 st.set_page_config(
     page_title="Evaluation Framework",
     layout="wide",
-    page_icon="📊"
+    page_icon=""
 )
 
 # --- DARK HCI CSS ---
