@@ -8,6 +8,7 @@ import gc
 import torch
 import platform
 import numpy as np
+import onnxruntime as ort
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from optimum.onnxruntime import ORTModelForSequenceClassification
 
@@ -45,46 +46,51 @@ def load_tokenizer_safe(model_path):
     except:
         return AutoTokenizer.from_pretrained("distilbert-base-multilingual-cased")
 
-def run_stress_test(name, path, runtime, texts):
-    print(f"\n>>> Stress Testing: {name} ({runtime})")
+def run_stress_test(name, path, runtime, texts, device="cpu"):
+    print(f"\n>>> Stress Testing: {name} ({runtime} on {device.upper()})")
     
-    # Garbage Collect
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # 1. MEASURE COLD LOAD TIME (Academic Metric)
     start_load = time.time()
     tokenizer = load_tokenizer_safe(path)
+    
     if runtime == "pytorch":
         model = AutoModelForSequenceClassification.from_pretrained(path)
-        model.to("cpu")
+        model.to(device)
         model.eval()
     else:
-        model = ORTModelForSequenceClassification.from_pretrained(path, provider="CPUExecutionProvider")
+        # Check available ONNX providers
+        available_providers = ort.get_available_providers()
+        print(f"  [INFO] Available ONNX Providers: {available_providers}")
+        
+        provider = "CUDAExecutionProvider" if device == "cuda" else "CPUExecutionProvider"
+        
+        # Fallback if CUDA is requested but not available in ONNX Runtime
+        if provider == "CUDAExecutionProvider" and provider not in available_providers:
+            print(f"  [WARN] {provider} not found in ONNX Runtime. Falling back to CPUExecutionProvider.")
+            provider = "CPUExecutionProvider"
+            
+        model = ORTModelForSequenceClassification.from_pretrained(path, provider=provider)
+        
     load_time = time.time() - start_load
     print(f"  Load Time: {load_time:.4f}s")
 
-    # 2. WARMUP PHASE (Stabilize CPU Cache)
-    # Run 10 dummy inferences to wake up the CPU cores
     warmup_text = texts[0]
     warmup_input = tokenizer(warmup_text, return_tensors="pt", truncation=True, max_length=128)
-    if "distilbert" in name.lower(): warmup_input.pop("token_type_ids", None)
+    if "distilbert" in name.lower(): 
+        warmup_input.pop("token_type_ids", None)
     
-    # Ensure inputs on CPU
     if runtime == "pytorch":
-        warmup_input = {k: v.to("cpu") for k, v in warmup_input.items()}
+        warmup_input = {k: v.to(device) for k, v in warmup_input.items()}
 
     for _ in range(10):
         _ = model(**warmup_input)
     print("  Warmup Complete.")
 
-    # 3. LATENCY & STABILITY LOOP
     latencies = []
-    
-    # Limit to 1000 requests loop (wrap around texts if needed)
     LOOP_LIMIT = 1000
-    
     print(f"  Running {LOOP_LIMIT} inference requests...")
     
     count = 0
@@ -94,10 +100,11 @@ def run_stress_test(name, path, runtime, texts):
         text = texts[i % len(texts)]
         
         inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
-        if "distilbert" in name.lower(): inputs.pop("token_type_ids", None)
+        if "distilbert" in name.lower(): 
+            inputs.pop("token_type_ids", None)
         
         if runtime == "pytorch":
-            inputs = {k: v.to("cpu") for k, v in inputs.items()}
+            inputs = {k: v.to(device) for k, v in inputs.items()}
             
         start_inf = time.perf_counter()
         if runtime == "pytorch":
@@ -107,14 +114,13 @@ def run_stress_test(name, path, runtime, texts):
             _ = model(**inputs)
         end_inf = time.perf_counter()
         
-        latencies.append((end_inf - start_inf) * 1000) # ms
+        latencies.append((end_inf - start_inf) * 1000)
         count += 1
         
     total_time = time.time() - start_total
     
-    # Metrics Calculation
     avg_lat = np.mean(latencies)
-    std_lat = np.std(latencies) # STABILITY METRIC
+    std_lat = np.std(latencies)
     p95_lat = np.percentile(latencies, 95)
     throughput = count / total_time
     
@@ -128,6 +134,7 @@ def run_stress_test(name, path, runtime, texts):
     del tokenizer
     return {
         "Model Name": name,
+        "Device": device.upper(),
         "Storage_MB": storage_mb,
         "Memory_MB": mem_usage,
         "Throughput_RPS": throughput,
@@ -139,30 +146,38 @@ def run_stress_test(name, path, runtime, texts):
 
 def main():
     print(f"Project Root Detected: {BASE_DIR}")
-    print("--- STAGE 9: ACADEMIC BENCHMARKING (CPU ONLY) ---")
+    print("--- STAGE 9: ACADEMIC BENCHMARKING (CPU & GPU) ---")
     
-    # Log Hardware Specs for Thesis
     print(f"[INFO] CPU: {platform.processor()}")
     print(f"[INFO] OS: {platform.system()} {platform.release()}")
     print(f"[INFO] Python: {sys.version.split()[0]}")
+    
+    devices_to_test = ["cpu"]
+    if torch.cuda.is_available():
+        devices_to_test.append("cuda")
+        print(f"[INFO] PyTorch GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("[WARN] PyTorch CUDA not available. Benchmarking on CPU only.")
 
     if not os.path.exists(DATA_PATH):
         print(f"[ERROR] Test data not found: {DATA_PATH}")
         return
 
     df = pd.read_csv(DATA_PATH)
-    if 'review' in df.columns: df = df.rename(columns={'review': 'text'})
-    texts = df['text'].tolist()[:100] # Use subset for speed
+    if 'review' in df.columns: 
+        df = df.rename(columns={'review': 'text'})
+    texts = df['text'].tolist()[:100]
     
     results = []
     
-    for name, path, runtime in MODELS_TO_BENCHMARK:
-        if not os.path.exists(path):
-            print(f"[SKIP] {name} path not found: {path}")
-            continue
-            
-        stats = run_stress_test(name, path, runtime, texts)
-        results.append(stats)
+    for device in devices_to_test:
+        for name, path, runtime in MODELS_TO_BENCHMARK:
+            if not os.path.exists(path):
+                print(f"[SKIP] {name} path not found: {path}")
+                continue
+                
+            stats = run_stress_test(name, path, runtime, texts, device=device)
+            results.append(stats)
         
     if results:
         res_df = pd.DataFrame(results)

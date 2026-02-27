@@ -27,7 +27,7 @@ RESULTS_PATH = os.path.join(RESULTS_DIR, "final_metrics.csv")
 st.set_page_config(
     page_title="Evaluation Framework",
     layout="wide",
-    page_icon=""
+    page_icon="⚡"
 )
 
 # --- DARK HCI CSS ---
@@ -69,7 +69,7 @@ MODELS = {
 # RESOURCE LOADERS
 # ----------------------------------------------------
 @st.cache_resource
-def load_one_model(key):
+def load_one_model(key, device="cpu"):
     try:
         model_conf = MODELS[key]
         path = model_conf["path"]
@@ -90,12 +90,20 @@ def load_one_model(key):
             options = ort.SessionOptions()
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             
+            # Select proper ONNX Provider based on requested device
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == "cuda" else ["CPUExecutionProvider"]
             model_file = os.path.join(path, "model.onnx") if os.path.isdir(path) else path
-            model = ort.InferenceSession(model_file, options, providers=["CPUExecutionProvider"])
+            
+            try:
+                model = ort.InferenceSession(model_file, options, providers=providers)
+            except Exception as e:
+                st.warning(f"ONNX Provider fallback triggered for {key}: {e}")
+                model = ort.InferenceSession(model_file, options, providers=["CPUExecutionProvider"])
+                
             return tokenizer, model, "onnx"
         else:
             model = AutoModelForSequenceClassification.from_pretrained(path)
-            model.to("cpu")
+            model.to(device)
             model.eval()
             return tokenizer, model, "pytorch"
             
@@ -206,9 +214,68 @@ def plot_horizontal_metric(df, metric_col, title, format_str, highlight_color):
     return (bars + text).properties(title=title, height=220)
 
 # ----------------------------------------------------
-# TRAINING SIMULATION RENDERER
+# MAIN APP LOGIC
 # ----------------------------------------------------
-def render_training_simulation():
+with st.sidebar:
+    st.header("Evaluation Controls")
+    mode = st.radio("Select View", [
+        "Performance Metrics Dashboard", 
+        "Real-Time Inference Analysis", 
+        "Training Lifecycle"
+    ])
+    st.divider()
+    
+    # Dynamic Hardware Detection
+    hw_info = platform.processor()
+    compute_eng = "CPU Execution Provider"
+    if torch.cuda.is_available():
+        hw_info += f"\n\n**GPU Profile:**\n{torch.cuda.get_device_name(0)}"
+        compute_eng += "\nCUDA Execution Provider"
+        
+    st.info(f"**Hardware Profile:**\n{hw_info}\n\n**Compute Engines Available:**\n{compute_eng}")
+
+st.title("Sentiment Analysis Evaluation Framework")
+
+if mode == "Performance Metrics Dashboard":
+    st.header("Comparative Model Evaluation")
+    
+    df_static = load_thesis_metrics()
+    if df_static is None:
+        st.error("Metrics file missing. Execute quantitative benchmarking script first.")
+    else:
+        # Drop duplicates in case the CSV already has GPU/CPU rows to prevent charting issues in the standard view
+        df_plot = df_static.drop_duplicates(subset=['Model Name']).copy()
+        df_plot = compute_research_metrics(df_plot)
+        
+        st.subheader("Key Performance Indicators by Architecture")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.altair_chart(
+                plot_horizontal_metric(df_plot, "Macro_F1", "Macro F1 Score (Higher is Better)", ".4f", "#2ecc71"), 
+                use_container_width=True
+            )
+            st.altair_chart(
+                plot_horizontal_metric(df_plot, "Speedup_Factor", "Speedup Factor (Higher is Better)", ".2f", "#9b59b6"), 
+                use_container_width=True
+            )
+            
+        with c2:
+            st.altair_chart(
+                plot_horizontal_metric(df_plot, "Latency_ms", "Inference Latency in ms (Lower is Better)", ".2f", "#e74c3c"), 
+                use_container_width=True
+            )
+            st.altair_chart(
+                plot_horizontal_metric(df_plot, "Performance_Retention", "Performance Retained %", ".1f", "#3498db"), 
+                use_container_width=True
+            )
+        
+        st.divider()
+        
+        st.subheader("Efficiency Distribution")
+        plot_pareto_with_indicator(df_plot)
+
+elif mode == "Training Lifecycle":
     st.header("Training Lifecycle Analysis")
     st.caption("Visual tracking of loss reduction and data processing through the designated architectural stages.")
     
@@ -283,68 +350,13 @@ def render_training_simulation():
                 time.sleep(0.15)
         st.success("Lifecycle Sequence Completed.")
 
-# ----------------------------------------------------
-# MAIN APP LOGIC
-# ----------------------------------------------------
-with st.sidebar:
-    st.header("Evaluation Controls")
-    mode = st.radio("Select View", [
-        "Performance Metrics Dashboard", 
-        "Real-Time Inference Analysis", 
-        "Training Lifecycle"
-    ])
-    st.divider()
-    st.info(f"**Hardware Profile:**\n{platform.processor()}\n\n**Compute Engine:**\nCPU Execution Provider")
-
-st.title("Sentiment Analysis Evaluation Framework")
-
-if mode == "Performance Metrics Dashboard":
-    st.header("Comparative Model Evaluation")
-    
-    df_static = load_thesis_metrics()
-    if df_static is None:
-        st.error("Metrics file missing. Execute quantitative benchmarking script first.")
-    else:
-        df_static = compute_research_metrics(df_static)
-        
-        st.subheader("Key Performance Indicators by Architecture")
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            st.altair_chart(
-                plot_horizontal_metric(df_static, "Macro_F1", "Macro F1 Score (Higher is Better)", ".4f", "#2ecc71"), 
-                use_container_width=True
-            )
-            st.altair_chart(
-                plot_horizontal_metric(df_static, "Speedup_Factor", "Speedup Factor (Higher is Better)", ".2f", "#9b59b6"), 
-                use_container_width=True
-            )
-            
-        with c2:
-            st.altair_chart(
-                plot_horizontal_metric(df_static, "Latency_ms", "Inference Latency in ms (Lower is Better)", ".2f", "#e74c3c"), 
-                use_container_width=True
-            )
-            st.altair_chart(
-                plot_horizontal_metric(df_static, "Performance_Retention", "Performance Retained %", ".1f", "#3498db"), 
-                use_container_width=True
-            )
-        
-        st.divider()
-        
-        st.subheader("Efficiency Distribution")
-        plot_pareto_with_indicator(df_static)
-
-elif mode == "Training Lifecycle":
-    render_training_simulation()
-
 elif mode == "Real-Time Inference Analysis":
-    st.header("Latency and Classification Assessment")
+    st.header("Latency and Classification Assessment (CPU vs GPU)")
     text_input = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.")
     
     if st.button("Execute Inference Sequence"):
         st.subheader("1. Subword Tokenization")
-        tokenizer, _, _ = load_one_model("Model D") 
+        tokenizer, _, _ = load_one_model("Model D", device="cpu") 
         if tokenizer:
             tokens = tokenizer.tokenize(text_input)
             token_ids = tokenizer.convert_tokens_to_ids(tokens)
@@ -359,77 +371,90 @@ elif mode == "Real-Time Inference Analysis":
                 """
             st.markdown(html_tokens, unsafe_allow_html=True)
         
-        st.subheader("2. Computational Execution")
+        st.subheader("2. Computational Execution (Hardware Benchmark)")
         results_data = []
         progress_bar = st.progress(0)
         
-        with st.spinner("Measuring response times across architectures..."):
-            for idx, (key, conf) in enumerate(MODELS.items()):
-                tokenizer, model, engine = load_one_model(key)
-                
-                if model is None:
-                    results_data.append({
-                        "Model": key, 
-                        "Engine": "N/A", 
-                        "Avg Latency": 0, 
-                        "Prediction": "Error", 
-                        "Confidence": "0%",
-                        "Probs": None
-                    })
-                    continue
+        devices_to_test = ["cpu"]
+        if torch.cuda.is_available():
+            devices_to_test.append("cuda")
+            
+        total_operations = len(MODELS) * len(devices_to_test)
+        current_op = 0
+        
+        with st.spinner("Measuring response times across architectures and hardware..."):
+            for device in devices_to_test:
+                for idx, (key, conf) in enumerate(MODELS.items()):
+                    tokenizer, model, engine = load_one_model(key, device=device)
                     
-                def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict):
-                    if eng_type == "onnx":
-                        inputs = tk_obj(txt, return_tensors="np", padding=True, truncation=True, max_length=128)
-                        if "token_type_ids" in inputs and ("distilbert" in c_dict["name"].lower() or key_n == "Model D"):
-                            del inputs["token_type_ids"]
-                            
-                        inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
-                        start = time.perf_counter()
-                        logits = mdl_obj.run(None, inputs)[0][0]
-                        dur = (time.perf_counter() - start) * 1000
-                        return logits, dur
-                    else:
-                        inputs = tk_obj(txt, return_tensors="pt", padding=True, truncation=True, max_length=128)
-                        if "token_type_ids" in inputs and ("distilbert" in c_dict["name"].lower() or "model_a" in key_n.lower() or "model_b" in key_n.lower()):
-                             del inputs["token_type_ids"]
+                    if model is None:
+                        results_data.append({
+                            "Model": key, 
+                            "Hardware": device.upper(),
+                            "Avg Latency": 0, 
+                            "Prediction": "Error", 
+                            "Confidence": "0%",
+                            "Probs": None
+                        })
+                        current_op += 1
+                        continue
                         
-                        inputs = {k: v.to("cpu") for k, v in inputs.items()}
-                        start = time.perf_counter()
-                        with torch.no_grad():
-                            logits = mdl_obj(**inputs).logits[0].numpy()
-                        dur = (time.perf_counter() - start) * 1000
-                        return logits, dur
+                    def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict, dev):
+                        if eng_type == "onnx":
+                            inputs = tk_obj(txt, return_tensors="np", padding=True, truncation=True, max_length=128)
+                            if "token_type_ids" in inputs and ("distilbert" in c_dict["name"].lower() or key_n == "Model D"):
+                                del inputs["token_type_ids"]
+                                
+                            inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+                            start = time.perf_counter()
+                            logits = mdl_obj.run(None, inputs)[0][0]
+                            dur = (time.perf_counter() - start) * 1000
+                            return logits, dur
+                        else:
+                            inputs = tk_obj(txt, return_tensors="pt", padding=True, truncation=True, max_length=128)
+                            if "token_type_ids" in inputs and ("distilbert" in c_dict["name"].lower() or "model_a" in key_n.lower() or "model_b" in key_n.lower()):
+                                 del inputs["token_type_ids"]
+                            
+                            # Push inputs to the specified device (CPU or CUDA)
+                            inputs = {k: v.to(dev) for k, v in inputs.items()}
+                            start = time.perf_counter()
+                            with torch.no_grad():
+                                # Critical: Bring logits back to CPU before numpy conversion
+                                logits = mdl_obj(**inputs).logits[0].cpu().numpy()
+                            dur = (time.perf_counter() - start) * 1000
+                            return logits, dur
 
-                try:
-                    run_inference("warmup", tokenizer, model, engine, key, conf)
-                except:
-                    pass 
-                
-                latencies = []
-                final_logits = None
-                
-                for _ in range(20): 
-                    logits, dur = run_inference(text_input, tokenizer, model, engine, key, conf)
-                    latencies.append(dur)
-                    final_logits = logits
+                    try:
+                        run_inference("warmup", tokenizer, model, engine, key, conf, device)
+                    except:
+                        pass 
                     
-                avg_lat = np.mean(latencies)
-                probs = softmax(final_logits)
-                pred_idx = np.argmax(probs)
-                labels = ["Negative", "Neutral", "Positive"]
-                
-                results_data.append({
-                    "Model": key,
-                    "Engine": engine.upper(),
-                    "Avg Latency": avg_lat, 
-                    "Prediction": labels[pred_idx],
-                    "Confidence": f"{probs[pred_idx]*100:.1f}%",
-                    "Probs": probs
-                })
-                
-                progress_bar.progress((idx + 1) / 4)
-                
+                    latencies = []
+                    final_logits = None
+                    
+                    for _ in range(20): 
+                        logits, dur = run_inference(text_input, tokenizer, model, engine, key, conf, device)
+                        latencies.append(dur)
+                        final_logits = logits
+                        
+                    avg_lat = np.mean(latencies)
+                    probs = softmax(final_logits)
+                    pred_idx = np.argmax(probs)
+                    labels = ["Negative", "Neutral", "Positive"]
+                    
+                    results_data.append({
+                        "Model": key,
+                        "Hardware": device.upper(),
+                        "Engine": engine.upper(),
+                        "Avg Latency": avg_lat, 
+                        "Prediction": labels[pred_idx],
+                        "Confidence": f"{probs[pred_idx]*100:.1f}%",
+                        "Probs": probs
+                    })
+                    
+                    current_op += 1
+                    progress_bar.progress(current_op / total_operations)
+                    
             st.subheader("3. Latency Benchmarks and Confidence Distributions")
             df_results = pd.DataFrame(results_data)
             
@@ -438,37 +463,30 @@ elif mode == "Real-Time Inference Analysis":
                 st.markdown("**Execution Logs**")
                 display_df = df_results.copy()
                 display_df["Avg Latency"] = display_df["Avg Latency"].apply(lambda x: f"{x:.2f} ms")
-                st.dataframe(display_df[["Model", "Engine", "Avg Latency", "Prediction", "Confidence"]], hide_index=True)
+                st.dataframe(display_df[["Model", "Hardware", "Engine", "Avg Latency", "Prediction", "Confidence"]], hide_index=True)
                 
             with c_chart:
-                st.markdown("**Latency Comparison**")
+                st.markdown("**Hardware Latency Comparison**")
                 
-                base_lat = alt.Chart(df_results).encode(
-                    x=alt.X('Model:N', sort=None, title=None, axis=alt.Axis(labelAngle=0, tickSize=0)),
-                    y=alt.Y('Avg Latency:Q', title='Latency (ms)')
-                )
+                # Grouped bar chart to compare CPU vs CUDA per model
+                bars_lat = alt.Chart(df_results).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+                    x=alt.X('Model:N', title=None, axis=alt.Axis(labelAngle=0)),
+                    xOffset='Hardware:N',
+                    y=alt.Y('Avg Latency:Q', title='Latency (ms)'),
+                    color=alt.Color('Hardware:N', scale=alt.Scale(
+                        domain=['CPU', 'CUDA'], 
+                        range=['#3498db', '#e74c3c']
+                    ), legend=alt.Legend(orient="top-right", title="Hardware")),
+                    tooltip=['Model', 'Hardware', 'Engine', alt.Tooltip('Avg Latency:Q', format='.2f')]
+                ).properties(height=350)
                 
-                bars_lat = base_lat.mark_bar(size=40, cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
-                    color=alt.condition(
-                        alt.datum.Model == 'Model D',
-                        alt.value('#2ecc71'),
-                        alt.value('#34495e')
-                    ),
-                    tooltip=['Model', 'Avg Latency']
-                )
-                
-                text_lat = base_lat.mark_text(
-                    align='center', baseline='bottom', dy=-5, color='white', fontWeight='bold'
-                ).encode(
-                    text=alt.Text('Avg Latency:Q', format='.2f')
-                )
-                
-                latency_chart = (bars_lat + text_lat).properties(height=350)
-                st.altair_chart(latency_chart, use_container_width=True)
+                st.altair_chart(bars_lat, use_container_width=True)
             
-            st.markdown("**Prediction Confidence**")
+            st.markdown("**Prediction Confidence (By Architecture)**")
             all_probs = []
-            for res in results_data:
+            # We only need to show confidence once per model since CPU/CUDA yield identical mathematical outputs
+            cpu_results = [res for res in results_data if res["Hardware"] == "CPU"]
+            for res in cpu_results:
                 if res["Probs"] is not None:
                     for i, s in enumerate(["Negative", "Neutral", "Positive"]):
                         all_probs.append({
