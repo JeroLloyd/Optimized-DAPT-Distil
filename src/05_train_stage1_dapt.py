@@ -1,7 +1,10 @@
 # FILE: 05_train_stage1_dapt.py
 import os
 import shutil
+import time
 import torch
+import pandas as pd
+import matplotlib.pyplot as plt
 from transformers import (
     AutoModelForMaskedLM,
     AutoTokenizer,
@@ -17,6 +20,10 @@ BASE_DIR = os.path.dirname(SCRIPT_DIR)
 PROCESSED_DIR = os.path.join(BASE_DIR, 'data', '03_processed')
 MODEL_OUTPUT_DIR = os.path.join(BASE_DIR, 'models', 'stage1_dapt_distilbert')
 TRAIN_FILE = os.path.join(PROCESSED_DIR, 'hybrid_corpus.txt')
+
+# Create report directories if they don't exist
+os.makedirs(os.path.join(BASE_DIR, 'reports', 'metrics'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'reports', 'figures'), exist_ok=True)
 
 # --- OPTIMIZED HYPERPARAMETERS ---
 MODEL_CHECKPOINT = "distilbert-base-multilingual-cased"
@@ -34,10 +41,8 @@ def main():
         print(f"[ERROR] Training data not found at: {TRAIN_FILE}")
         return
 
-    print("--- STAGE 1: Domain-Adaptive Pre-training (DAPT) ---")
-    
-    # Clean previous run to ensure fresh training
     if os.path.exists(MODEL_OUTPUT_DIR):
+        print(f"Clearing old model directory: {MODEL_OUTPUT_DIR}")
         shutil.rmtree(MODEL_OUTPUT_DIR)
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
@@ -64,8 +69,9 @@ def main():
         learning_rate=LEARNING_RATE,
         weight_decay=0.01,
         warmup_ratio=0.06,
+        logging_strategy="steps",
+        logging_steps=100, # Log frequently to get a smooth curve
         fp16=torch.cuda.is_available(),
-        logging_dir=os.path.join(BASE_DIR, 'logs', 'dapt'),
         report_to="none"
     )
     
@@ -76,12 +82,56 @@ def main():
         data_collator=data_collator,
     )
     
+    print("\n=== STARTING DOMAIN-ADAPTIVE PRE-TRAINING (30 EPOCHS) ===")
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+        
+    start_time = time.time()
+    
+    # Execute Training
     trainer.train()
     
-    print("Saving DAPT model...")
+    total_time = time.time() - start_time
+    
+    # Extract Hardware Metrics
+    print(f"\n--- DAPT HARDWARE & LOSS METRICS ---")
+    print(f"Total Training Time: {total_time:.2f} seconds")
+    if torch.cuda.is_available():
+        peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+        print(f"Peak GPU VRAM Allocated: {peak_vram_mb:.2f} MB")
+        
+    # Extract Loss History
+    log_history = trainer.state.log_history
+    losses = [log for log in log_history if 'loss' in log]
+    
+    if losses:
+        initial_loss = losses[0]['loss']
+        final_loss = losses[-1]['loss']
+        print(f"Initial MLM Loss: {initial_loss:.4f}")
+        print(f"Final MLM Loss: {final_loss:.4f}")
+        
+        # Save Loss Data
+        df_loss = pd.DataFrame(losses)
+        df_loss.to_csv(os.path.join(BASE_DIR, 'reports', 'metrics', 'dapt_loss.csv'), index=False)
+        
+        # Plot Loss Curve
+        plt.figure(figsize=(8, 5))
+        plt.plot(df_loss['step'], df_loss['loss'], label='Training Loss (MLM)', color='#003366', linewidth=2)
+        plt.xlabel('Training Steps', fontweight='bold')
+        plt.ylabel('Cross-Entropy Loss', fontweight='bold')
+        plt.title('Domain-Adaptive Pre-Training Loss Reduction', fontweight='bold', pad=15)
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.legend()
+        plt.tight_layout()
+        
+        plot_path = os.path.join(BASE_DIR, 'reports', 'figures', 'dapt_loss_curve.png')
+        plt.savefig(plot_path, dpi=300)
+        print(f"SUCCESS: Loss curve saved to {plot_path}")
+
+    print("------------------------------------\n")
+    
     trainer.save_model(MODEL_OUTPUT_DIR)
     tokenizer.save_pretrained(MODEL_OUTPUT_DIR)
-    print(f"SUCCESS: DAPT Model saved to {MODEL_OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()

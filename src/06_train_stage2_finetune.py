@@ -78,8 +78,7 @@ def train_model(config, tokenized_datasets, tokenizer):
     
     training_args = TrainingArguments(
         output_dir=config['output_dir'],
-        # FIXED: evaluation_strategy -> eval_strategy
-        eval_strategy="epoch",
+        evaluation_strategy="epoch",
         save_strategy="epoch",
         learning_rate=config['learning_rate'],
         per_device_train_batch_size=config['batch_size'],
@@ -92,6 +91,8 @@ def train_model(config, tokenized_datasets, tokenizer):
         report_to="none"
     )
 
+    import time
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -102,9 +103,29 @@ def train_model(config, tokenized_datasets, tokenizer):
         callbacks=[EarlyStoppingCallback(early_stopping_patience=4)]
     )
 
+    # Reset GPU memory tracker before training starts
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+        
+    start_time = time.time()
+    
+    # Execute training
     trainer.train()
+    
+    # Calculate total duration and peak memory
+    total_time = time.time() - start_time
+    avg_epoch_time = total_time / config['num_epochs']
+    
+    print(f"\n--- HARDWARE METRICS: {config['name']} ---")
+    print(f"Total Training Time: {total_time:.2f} seconds")
+    print(f"Average Time per Epoch: {avg_epoch_time:.2f} seconds")
+    
+    if torch.cuda.is_available():
+        peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+        print(f"Peak GPU VRAM Allocated: {peak_vram_mb:.2f} MB")
+    print("-------------------------------------------\n")
+
     trainer.save_model(config['output_dir'])
-    tokenizer.save_pretrained(config['output_dir'])
 
 def normalize_columns(df):
     """Normalize column names to standard 'text' and 'label'."""
