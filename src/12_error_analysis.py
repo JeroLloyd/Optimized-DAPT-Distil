@@ -43,7 +43,6 @@ if not hasattr(transformers.utils.generic, 'OutputRecorder'):
 
 from sklearn.metrics import confusion_matrix
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from optimum.onnxruntime import ORTModelForSequenceClassification
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,8 +54,11 @@ else:
     BASE_DIR = SCRIPT_DIR
 
 DATA_PATH = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final', 'test.csv')
-MODEL_C_DIR = os.path.join(BASE_DIR, 'models', 'model_c_xlmr')
-MODEL_D_DIR = os.path.join(BASE_DIR, 'models', 'model_d_onnx')
+
+# CHANGED: Now targeting Model A (Base) and Model B (DAPT)
+MODEL_A_DIR = os.path.join(BASE_DIR, 'models', 'model_a_base')
+MODEL_B_DIR = os.path.join(BASE_DIR, 'models', 'model_b_dapt')
+
 REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
 FIGURES_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
 
@@ -92,47 +94,44 @@ def main():
     texts = df['text'].tolist()
     true_labels = df['label'].tolist()
 
-    print("Loading Model C (XLM-R)...")
-    tokenizer_c = safe_load_tokenizer(MODEL_C_DIR, "xlm-roberta-base")
-    model_c = AutoModelForSequenceClassification.from_pretrained(MODEL_C_DIR)
-    model_c.eval()
+    print("Loading Model A (Base DistilBERT)...")
+    tokenizer_a = safe_load_tokenizer(MODEL_A_DIR, "distilbert-base-multilingual-cased")
+    model_a = AutoModelForSequenceClassification.from_pretrained(MODEL_A_DIR)
+    model_a.eval()
 
-    print("Loading Model D (Optimized DAPT)...")
-    tokenizer_d = safe_load_tokenizer(MODEL_D_DIR, "distilbert-base-multilingual-cased")
-    model_d = ORTModelForSequenceClassification.from_pretrained(MODEL_D_DIR, provider="CPUExecutionProvider")
+    print("Loading Model B (DAPT-DistilBERT)...")
+    tokenizer_b = safe_load_tokenizer(MODEL_B_DIR, "distilbert-base-multilingual-cased")
+    model_b = AutoModelForSequenceClassification.from_pretrained(MODEL_B_DIR)
+    model_b.eval()
 
     def get_predictions(tokenizer, model, is_onnx=False):
         preds = []
         print(f"Predicting {len(texts)} sequences...")
         for text in texts:
             inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
-            # Remove token_type_ids for distilbert/ONNX compatibility if present
-            if is_onnx and "token_type_ids" in inputs:
+            # Remove token_type_ids for distilbert compatibility if present
+            if "token_type_ids" in inputs:
                 inputs.pop("token_type_ids")
 
-            if is_onnx:
+            with torch.no_grad():
                 outputs = model(**inputs)
                 logits = outputs.logits
-            else:
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    logits = outputs.logits
                     
-            pred = np.argmax(logits.numpy() if is_onnx else logits.cpu().numpy(), axis=1)[0]
+            pred = np.argmax(logits.cpu().numpy(), axis=1)[0]
             preds.append(pred)
         return preds
 
-    print("\nRunning inferences for XLM-R...")
-    preds_c = get_predictions(tokenizer_c, model_c, is_onnx=False)
+    print("\nRunning inferences for Base DistilBERT (Model A)...")
+    preds_a = get_predictions(tokenizer_a, model_a, is_onnx=False)
     
-    print("Running inferences for Optimized DAPT...")
-    preds_d = get_predictions(tokenizer_d, model_d, is_onnx=True)
+    print("Running inferences for DAPT-DistilBERT (Model B)...")
+    preds_b = get_predictions(tokenizer_b, model_b, is_onnx=False)
 
-    df['Pred_XLM_R'] = preds_c
-    df['Pred_Optimized_DAPT'] = preds_d
+    df['Pred_Base'] = preds_a
+    df['Pred_DAPT'] = preds_b
 
-    print("\n--- CONFUSION MATRIX (Model D) ---")
-    cm = confusion_matrix(true_labels, preds_d, labels=[0, 1, 2])
+    print("\n--- CONFUSION MATRIX (Model B - DAPT) ---")
+    cm = confusion_matrix(true_labels, preds_b, labels=[0, 1, 2])
     
     cm_df = pd.DataFrame(cm, 
                          index=["True Negative", "True Neutral", "True Positive"], 
@@ -154,7 +153,7 @@ def main():
                 annot_kws={"size": 14, "weight": "bold"},
                 linewidths=1, linecolor='black')
     
-    plt.title("Confusion Matrix: Optimized DAPT (Model D)", fontsize=16, fontweight='bold', pad=20)
+    plt.title("Confusion Matrix: DAPT-DistilBERT (Model B)", fontsize=16, fontweight='bold', pad=20)
     plt.ylabel('True Sentiment', fontsize=13, fontweight='bold')
     plt.xlabel('Predicted Sentiment', fontsize=13, fontweight='bold')
     plt.tight_layout()
@@ -166,16 +165,17 @@ def main():
 
     print("\n--- EXTRACTING QUALITATIVE ERRORS ---")
     
-    error_df = df[(df['label'] != df['Pred_Optimized_DAPT']) & (df['label'] == df['Pred_XLM_R'])].copy()
+    # CHANGED: Isolate where Base DistilBERT failed but DAPT-DistilBERT succeeded
+    error_df = df[(df['label'] != df['Pred_Base']) & (df['label'] == df['Pred_DAPT'])].copy()
     
     error_df['True_Sentiment'] = error_df['label'].map(LABEL_MAP)
-    error_df['Model_D_Guessed'] = error_df['Pred_Optimized_DAPT'].map(LABEL_MAP)
+    error_df['Base_Model_Guessed'] = error_df['Pred_Base'].map(LABEL_MAP)
     
-    export_df = error_df[['text', 'True_Sentiment', 'Model_D_Guessed']]
+    export_df = error_df[['text', 'True_Sentiment', 'Base_Model_Guessed']]
     
     errors_path = os.path.join(REPORTS_DIR, 'qualitative_errors_for_thesis.csv')
     export_df.to_csv(errors_path, index=False)
-    print(f"Found {len(export_df)} specific sentences where XLM-R beat the Optimized model.")
+    print(f"Found {len(export_df)} specific sentences where Base DistilBERT failed but DAPT succeeded.")
     print(f"Saved qualitative errors to: {errors_path}")
     print("\nDone! Open 'qualitative_errors_for_thesis.csv' to pick real examples for Chapter 4.4.")
 

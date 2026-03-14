@@ -11,6 +11,12 @@ import altair as alt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from scipy.special import softmax
 
+# Strict Inter-op threading limit for accurate Edge CPU Emulation
+try:
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
 # --- PATH CONFIGURATION ---
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if os.path.exists(os.path.join(CURRENT_DIR, 'models')):
@@ -84,6 +90,15 @@ def load_one_model(key, device="cpu"):
     except Exception as e:
         print(f"Error loading {key}: {e}")
         return None, None, "error"
+
+def get_edge_onnx_session(path, cores):
+    """Creates a temporary, non-cached ONNX session with strictly limited threads."""
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = cores
+    options.inter_op_num_threads = 1
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    model_file = os.path.join(path, "model.onnx") if os.path.isdir(path) else path
+    return ort.InferenceSession(model_file, options, providers=["CPUExecutionProvider"])
 
 @st.cache_data
 def load_thesis_metrics():
@@ -183,7 +198,7 @@ def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict, dev):
 # --- UI LOGIC ---
 with st.sidebar:
     st.header("Evaluation Controls")
-    mode = st.radio("Select View", ["Evaluation Dashboard", "Diagnostic Inference", "Batch Simulation"])
+    mode = st.radio("Select View", ["Evaluation Dashboard", "Edge Emulation", "Diagnostic Inference", "Batch Simulation"])
     st.divider()
     hw_info = platform.processor()
     compute_eng = "CPU Execution Provider"
@@ -213,6 +228,116 @@ if mode == "Evaluation Dashboard":
         st.divider()
         st.subheader("Efficiency Distribution")
         plot_pareto_with_indicator(df_plot)
+
+elif mode == "Edge Emulation":
+    # --- LIVE EDGE EMULATION SECTION ---
+    st.header("Live Edge Hardware Emulation")
+    st.markdown("Enter code-switched text to dynamically benchmark it across 1 to 4 restricted CPU cores. This emulates inference limits for common low-end devices.")
+    text_input_edge = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.", key="edge_input")
+    
+    if st.button("Simulate Hardware Processing"):
+        st.subheader("1. Subword Tokenization")
+        tokenizer, _, _ = load_one_model("Model D", device="cpu") 
+        if tokenizer:
+            tokens = tokenizer.tokenize(text_input_edge)
+            token_ids = tokenizer.convert_tokens_to_ids(tokens)
+            html_tokens = ""
+            for t, tid in zip(tokens, token_ids):
+                html_tokens += f"<div style='display:inline-block; margin:2px; padding:5px; background:#1E1E1E; border: 1px solid #333; border-radius:4px; text-align:center;'><span style='color:#2ecc71; font-size:13px; font-weight:bold;'>{t}</span><br><span style='color:#aaaaaa; font-size:11px;'>{tid}</span></div>"
+            st.markdown(html_tokens, unsafe_allow_html=True)
+            
+        st.subheader("2. Computational Execution (Restricted Cores)")
+        
+        edge_profiles = [
+            {"name": "IoT Sensor Node", "cores": 1},
+            {"name": "Budget Mobile Phone", "cores": 2},
+            {"name": "Mid-Range Smartphone", "cores": 3},
+            {"name": "Low-End Laptop", "cores": 4}
+        ]
+        
+        results_data_edge = []
+        progress_bar = st.progress(0)
+        total_operations = len(edge_profiles) * len(MODELS)
+        current_op = 0
+        
+        with st.spinner("Emulating isolated hardware constraints..."):
+            for profile in edge_profiles:
+                cores = profile["cores"]
+                device_name = f"{profile['name']} ({cores} Cores)"
+                
+                # Apply Dynamic Thread Limit for PyTorch
+                torch.set_num_threads(cores)
+                
+                for key, conf in MODELS.items():
+                    if conf["type"] == "onnx":
+                        tokenizer, _, _ = load_one_model(key, "cpu")
+                        if tokenizer is None:
+                            current_op += 1; continue
+                        try:
+                            # Apply thread limit specifically to ONNX session creation
+                            model = get_edge_onnx_session(conf["path"], cores)
+                        except Exception:
+                            current_op += 1; continue
+                        engine = "onnx"
+                    else:
+                        tokenizer, model, engine = load_one_model(key, "cpu")
+                        if model is None:
+                            current_op += 1; continue
+                            
+                    # Warmup
+                    try:
+                        run_inference("warmup", tokenizer, model, engine, key, conf, "cpu")
+                    except Exception:
+                        pass
+                        
+                    # Measure Latency
+                    latencies = []
+                    final_logits = None
+                    for _ in range(10): # Run 10 times for stable average in Streamlit
+                        logits, dur = run_inference(text_input_edge, tokenizer, model, engine, key, conf, "cpu")
+                        latencies.append(dur)
+                        final_logits = logits
+                        
+                    avg_lat = np.mean(latencies)
+                    probs = softmax(final_logits)
+                    pred_idx = np.argmax(probs)
+                    labels = ["Negative", "Neutral", "Positive"]
+                    
+                    results_data_edge.append({
+                        "Model": key,
+                        "Hardware Profile": device_name,
+                        "Avg Latency": avg_lat,
+                        "Prediction": labels[pred_idx],
+                        "Confidence": max(probs),
+                        "Probs": probs
+                    })
+                    
+                    current_op += 1
+                    progress_bar.progress(current_op / total_operations)
+                    
+        st.subheader("3. Live Hardware Latency Comparison")
+        df_results_edge = pd.DataFrame(results_data_edge)
+        
+        # Display Logs Table
+        display_df = df_results_edge.copy()
+        display_df["Avg Latency"] = display_df["Avg Latency"].apply(lambda x: f"{x:.2f} ms")
+        display_df["Confidence"] = display_df["Confidence"].apply(lambda x: f"{x*100:.1f}%")
+        st.dataframe(display_df[["Model", "Hardware Profile", "Avg Latency", "Prediction", "Confidence"]], use_container_width=True, hide_index=True)
+        
+        # Display Chart
+        live_lat_chart = alt.Chart(df_results_edge).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+            x=alt.X('Hardware Profile:N', title=None, sort=None, axis=alt.Axis(labelAngle=0, labelColor='white')),
+            xOffset='Model:N',
+            y=alt.Y('Avg Latency:Q', title='Latency (ms)', axis=alt.Axis(labelColor='white', titleColor='white')),
+            color=alt.Color('Model:N', scale=alt.Scale(scheme='set1')),
+            tooltip=['Model', 'Hardware Profile', alt.Tooltip('Avg Latency:Q', format='.2f')]
+        ).properties(height=400)
+        
+        text_lat_edge = live_lat_chart.mark_text(
+            align='center', baseline='bottom', dy=-5, color='white', fontWeight='bold', fontSize=11
+        ).encode(text=alt.Text('Avg Latency:Q', format='.1f'))
+        
+        st.altair_chart(live_lat_chart + text_lat_edge, use_container_width=True)
 
 elif mode == "Diagnostic Inference":
     st.header("Latency and Classification Assessment (CPU vs GPU)")

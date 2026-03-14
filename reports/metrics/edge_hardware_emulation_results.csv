@@ -1,0 +1,17 @@
+Emulated_Device,Model,Macro_F1,Latency_ms
+IoT Sensor Node (1 Core),Model A (Base DistilBERT),0.7851,36.18
+IoT Sensor Node (1 Core),Model B (DAPT-DistilBERT),0.8488,36.18
+IoT Sensor Node (1 Core),Model C (XLM-R Base),0.8,67.18
+IoT Sensor Node (1 Core),Model D (Optimized DAPT),0.7759,11.18
+Budget Mobile Phone (2 Cores),Model A (Base DistilBERT),0.7851,25.17
+Budget Mobile Phone (2 Cores),Model B (DAPT-DistilBERT),0.8488,26.15
+Budget Mobile Phone (2 Cores),Model C (XLM-R Base),0.8,43.66
+Budget Mobile Phone (2 Cores),Model D (Optimized DAPT),0.7759,7.46
+Mid-Range Smartphone (3 Cores),Model A (Base DistilBERT),0.7851,20.14
+Mid-Range Smartphone (3 Cores),Model B (DAPT-DistilBERT),0.8488,20.26
+Mid-Range Smartphone (3 Cores),Model C (XLM-R Base),0.8,34.18
+Mid-Range Smartphone (3 Cores),Model D (Optimized DAPT),0.7759,6.21
+Low-End Laptop (4 Cores),Model A (Base DistilBERT),0.7851,17.9
+Low-End Laptop (4 Cores),Model B (DAPT-DistilBERT),0.8488,17.55
+Low-End Laptop (4 Cores),Model C (XLM-R Base),0.8,30.42
+Low-End Laptop (4 Cores),Model D (Optimized DAPT),0.7759,5.27
