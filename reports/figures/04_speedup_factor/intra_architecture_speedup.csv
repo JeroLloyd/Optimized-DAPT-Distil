@@ -1,0 +1,3 @@
+Model Name,Short_Name,Latency_ms
+DAPT-DistilBERT,DAPT-Distil,32.87796364503504
+Optimized DAPT,Optimized DAPT,3.910326812973586

@@ -183,20 +183,11 @@ def main():
             
     if raw_results:
         df_res = pd.DataFrame(raw_results)
-        
-        # Speedup Baseline
-        baseline_row = df_res[df_res["Model ID"] == "Model A"]
-        if not baseline_row.empty:
-            baseline_lat = baseline_row.iloc[0]["Avg Latency (ms)"]
-            df_res["Speedup Factor"] = baseline_lat / df_res["Avg Latency (ms)"]
-        else:
-            df_res["Speedup Factor"] = 1.0
 
         output_file = os.path.join(RESULTS_DIR, "final_metrics.csv")
         df_res.to_csv(output_file, index=False)
         print("\nFinal Metrics Table:")
-        # Added "Accuracy" to the list below
-        print(df_res[["Model Name", "Accuracy", "Macro F1 Score", "Avg Latency (ms)", "Model Size (MB)", "Speedup Factor"]].to_string(index=False))
+        print(df_res[["Model Name", "Accuracy", "Macro F1 Score", "Avg Latency (ms)", "Model Size (MB)"]].to_string(index=False))
     else:
         print("[WARNING] No results generated.")
 

@@ -16,14 +16,14 @@ from datasets import load_dataset
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = SCRIPT_DIR if os.path.basename(SCRIPT_DIR) != "src" else os.path.dirname(SCRIPT_DIR)
 PROCESSED_DIR = os.path.join(BASE_DIR, 'data', '03_processed')
 MODEL_OUTPUT_DIR = os.path.join(BASE_DIR, 'models', 'stage1_dapt_distilbert')
 TRAIN_FILE = os.path.join(PROCESSED_DIR, 'hybrid_corpus.txt')
 
-# Create report directories if they don't exist
-os.makedirs(os.path.join(BASE_DIR, 'reports', 'metrics'), exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, 'reports', 'figures'), exist_ok=True)
+# Create specific report directory
+DAPT_LOSS_DIR = os.path.join(BASE_DIR, 'reports', 'figures', '09_dapt_loss')
+os.makedirs(DAPT_LOSS_DIR, exist_ok=True)
 
 # --- OPTIMIZED HYPERPARAMETERS ---
 MODEL_CHECKPOINT = "distilbert-base-multilingual-cased"
@@ -110,9 +110,11 @@ def main():
         print(f"Initial MLM Loss: {initial_loss:.4f}")
         print(f"Final MLM Loss: {final_loss:.4f}")
         
-        # Save Loss Data
+        # Save Loss Data to subfolder
         df_loss = pd.DataFrame(losses)
-        df_loss.to_csv(os.path.join(BASE_DIR, 'reports', 'metrics', 'dapt_loss.csv'), index=False)
+        csv_path = os.path.join(DAPT_LOSS_DIR, 'dapt_loss.csv')
+        df_loss.to_csv(csv_path, index=False)
+        print(f"Saved Data: {csv_path}")
         
         # Plot Loss Curve
         plt.figure(figsize=(8, 5))
@@ -124,8 +126,10 @@ def main():
         plt.legend()
         plt.tight_layout()
         
-        plot_path = os.path.join(BASE_DIR, 'reports', 'figures', 'dapt_loss_curve.png')
+        # Save Plot to subfolder
+        plot_path = os.path.join(DAPT_LOSS_DIR, 'dapt_loss_curve.png')
         plt.savefig(plot_path, dpi=300)
+        plt.close()
         print(f"SUCCESS: Loss curve saved to {plot_path}")
 
     print("------------------------------------\n")
