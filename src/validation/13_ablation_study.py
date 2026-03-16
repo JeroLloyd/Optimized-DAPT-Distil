@@ -78,7 +78,6 @@ def main():
     train_df = pd.read_csv(os.path.join(FIRECS_DIR, 'train.csv'))
     val_df = pd.read_csv(os.path.join(FIRECS_DIR, 'val.csv'))
     
-    # FIX: Explicitly enforce integer types for classification
     train_df['label'] = train_df['label'].astype(int)
     val_df['label'] = val_df['label'].astype(int)
     
@@ -91,7 +90,6 @@ def main():
         lambda x: tokenizer(x["text"], truncation=True, max_length=128), batched=True
     )
     
-    # FIX: Explicitly define problem_type to prevent BCE error
     ft_model = AutoModelForSequenceClassification.from_pretrained(
         DAPT_OUT, 
         num_labels=3,
@@ -112,20 +110,32 @@ def main():
     
     ft_trainer.train()
     
-    print("\n=== ABLATION RESULTS ===")
-    metrics = ft_trainer.evaluate()
-    macro_f1 = metrics['eval_macro_f1']
-    accuracy = metrics['eval_accuracy']
+    print("\n=== STEP 4: CONSISTENT TEST SET EVALUATION ===")
+    # Load official test data for honest comparison
+    test_df = pd.read_csv(os.path.join(FIRECS_DIR, 'test.csv'))
+    test_df['label'] = test_df['label'].astype(int)
+    test_dataset = Dataset.from_pandas(test_df[['review', 'label']].rename(columns={'review':'text'}))
     
-    print(f"Authentic-Only DAPT Macro F1-Score: {macro_f1:.4f}")
-    print("Compare this score to your Hybrid F1-Score (0.8147) in your manuscript.")
+    tokenized_test = test_dataset.map(
+        lambda x: tokenizer(x["text"], truncation=True, max_length=128), batched=True
+    )
+    
+    print("Evaluating Ablation Model on the official Test Set...")
+    test_metrics = ft_trainer.evaluate(tokenized_test)
+    
+    macro_f1_test = test_metrics['eval_macro_f1']
+    accuracy_test = test_metrics['eval_accuracy']
+    
+    print(f"\n=== ABLATION RESULTS (TEST SET) ===")
+    print(f"Authentic-Only DAPT Macro F1-Score: {macro_f1_test:.4f}")
+    print(f"Hybrid DAPT-DistilBERT (Reference) F1-Score: 0.8059")
 
     # SAVE METRICS TO CSV
     results_df = pd.DataFrame([{
         "Model": "Authentic-Only DAPT (Ablation)",
-        "Macro F1 Score": macro_f1,
-        "Accuracy": accuracy,
-        "Evaluation Loss": metrics['eval_loss']
+        "Macro F1 Score": round(macro_f1_test, 4),
+        "Accuracy": round(accuracy_test, 4),
+        "Data_Source": "Official Test Set"
     }])
     
     csv_path = os.path.join(REPORTS_DIR, 'ablation_metrics.csv')

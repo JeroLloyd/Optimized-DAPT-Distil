@@ -4,15 +4,39 @@ import shutil
 import time
 import torch
 import pandas as pd
+import numpy as np
+import random
 import matplotlib.pyplot as plt
 from transformers import (
     AutoModelForMaskedLM,
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     TrainingArguments,
-    Trainer
+    Trainer,
+    set_seed
 )
 from datasets import load_dataset
+
+# --- DETERMINISTIC SEED LOCK ---
+def lock_environmental_seeds(seed=42):
+    """
+    Locks all random seeds and forces deterministic algorithms 
+    to ensure the DAPT phase produces identical weights on every run.
+    """
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    set_seed(seed)
+    
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+# Execute the lock immediately
+lock_environmental_seeds(42)
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,13 +54,14 @@ os.makedirs(DAPT_LOSS_DIR, exist_ok=True)
 MODEL_CHECKPOINT = "distilbert-base-multilingual-cased"
 BATCH_SIZE = 16
 
-# CRITICAL SETTINGS FOR DAPT > BASE
+# CRITICAL SETTINGS FOR STABILITY
 LEARNING_RATE = 2e-5  
-EPOCHS = 30  # INCREASED: 6 -> 30. This ensures the domain knowledge sticks.
+EPOCHS = 8  # Optimized from 30 to 8 to prevent gradient instability and overfitting
 MLM_PROBABILITY = 0.15
 
 def main():
     print(f"Project Root Detected: {BASE_DIR}")
+    print(f"--- STAGE 1: DETERMINISTIC DOMAIN-ADAPTIVE PRE-TRAINING ({EPOCHS} EPOCHS) ---")
     
     if not os.path.exists(TRAIN_FILE):
         print(f"[ERROR] Training data not found at: {TRAIN_FILE}")
@@ -71,7 +96,7 @@ def main():
         weight_decay=0.01,
         warmup_ratio=0.06,
         logging_strategy="steps",
-        logging_steps=100, # Log frequently to get a smooth curve
+        logging_steps=100, 
         fp16=torch.cuda.is_available(),
         report_to="none"
     )
@@ -83,7 +108,6 @@ def main():
         data_collator=data_collator,
     )
     
-    print("\n=== STARTING DOMAIN-ADAPTIVE PRE-TRAINING (30 EPOCHS) ===")
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
         
@@ -94,28 +118,27 @@ def main():
     
     total_time = time.time() - start_time
     
-    # Extract Hardware Metrics
-    print(f"\n--- DAPT HARDWARE & LOSS METRICS ---")
-    print(f"Total Training Time: {total_time:.2f} seconds")
+    # Capture Peak VRAM
+    peak_vram_mb = 0
     if torch.cuda.is_available():
         peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
-        print(f"Peak GPU VRAM Allocated: {peak_vram_mb:.2f} MB")
+
+    print(f"\n--- DAPT PERFORMANCE SUMMARY ---")
+    print(f"Total Training Time: {total_time:.2f} seconds")
+    print(f"Peak GPU VRAM Allocated: {peak_vram_mb:.2f} MB")
         
     # Extract Loss History
     log_history = trainer.state.log_history
     losses = [log for log in log_history if 'loss' in log]
     
     if losses:
-        initial_loss = losses[0]['loss']
-        final_loss = losses[-1]['loss']
-        print(f"Initial MLM Loss: {initial_loss:.4f}")
-        print(f"Final MLM Loss: {final_loss:.4f}")
-        
-        # Save Loss Data to subfolder
+        # Save Loss Data AND VRAM to existing CSV
         df_loss = pd.DataFrame(losses)
+        df_loss['peak_vram_mb'] = round(peak_vram_mb, 2)
+        
         csv_path = os.path.join(DAPT_LOSS_DIR, 'dapt_loss.csv')
         df_loss.to_csv(csv_path, index=False)
-        print(f"Saved Data: {csv_path}")
+        print(f"SUCCESS: Training metrics (Loss + VRAM) saved to {csv_path}")
         
         # Plot Loss Curve
         plt.figure(figsize=(8, 5))
@@ -127,11 +150,9 @@ def main():
         plt.legend()
         plt.tight_layout()
         
-        # Save Plot to subfolder
         plot_path = os.path.join(DAPT_LOSS_DIR, 'dapt_loss_curve.png')
         plt.savefig(plot_path, dpi=300)
         plt.close()
-        print(f"SUCCESS: Loss curve saved to {plot_path}")
 
     print("------------------------------------\n")
     

@@ -79,7 +79,7 @@ def run_stress_test(name, path, runtime, texts, device="cpu"):
     print(f"  Load Time: {load_time:.4f}s")
 
     warmup_text = texts[0]
-    warmup_input = tokenizer(warmup_text, return_tensors="pt", truncation=True, max_length=128)
+    warmup_input = tokenizer(warmup_text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
     if "distilbert" in name.lower(): 
         warmup_input.pop("token_type_ids", None)
     
@@ -100,7 +100,7 @@ def run_stress_test(name, path, runtime, texts, device="cpu"):
     for i in range(LOOP_LIMIT):
         text = texts[i % len(texts)]
         
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
         if "distilbert" in name.lower(): 
             inputs.pop("token_type_ids", None)
         
@@ -167,7 +167,7 @@ def main():
     df = pd.read_csv(DATA_PATH)
     if 'review' in df.columns: 
         df = df.rename(columns={'review': 'text'})
-    texts = df['text'].tolist()[:100]
+    texts = df['text'].tolist()
     
     results = []
     

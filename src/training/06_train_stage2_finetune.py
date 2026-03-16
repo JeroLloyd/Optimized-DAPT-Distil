@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import torch
 import shutil
+import gc
+import random
 from datasets import Dataset, DatasetDict
 from transformers import (
     AutoTokenizer, 
@@ -14,6 +16,24 @@ from transformers import (
     set_seed
 )
 from sklearn.metrics import accuracy_score, f1_score
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# --- DETERMINISTIC SEED LOCK ---
+def lock_environmental_seeds(seed=42):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    set_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+lock_environmental_seeds(42)
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,39 +41,39 @@ SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
 DATA_DIR = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
+REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
+os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # Global Defaults
 MAX_LEN = 128
-set_seed(42)
+BASE_LIMIT_RATES = [1e-5, 2e-5]
+SEARCH_RATES = [1e-5, 2e-5, 3e-5, 5e-5]
 
-# --- CONFIGURATION MATRIX (CRITICAL FOR HIERARCHY) ---
 TRAINING_CONFIGS = [
     {
-        # Model A: High LR to learn from scratch
         "name": "Model A (Base DistilBERT)",
         "base_model": "distilbert-base-multilingual-cased",
         "output_dir": os.path.join(MODELS_DIR, "model_a_base"),
-        "learning_rate": 5e-5, 
-        "num_epochs": 5,
+        "learning_rates": BASE_LIMIT_RATES, 
+        "num_epochs": 3, 
         "batch_size": 32
     },
     {
-        # Model B: Low LR to PRESERVE DAPT knowledge
         "name": "Model B (DAPT-DistilBERT)",
         "base_model": os.path.join(MODELS_DIR, "stage1_dapt_distilbert"),
         "output_dir": os.path.join(MODELS_DIR, "model_b_dapt"),
-        "learning_rate": 2e-5,  # <-- THIS IS THE KEY
-        "num_epochs": 8,        # <-- More epochs to settle
+        "learning_rates": SEARCH_RATES, 
+        "num_epochs": 8,
         "batch_size": 32
     },
     {
-        # Model C: More epochs for the massive model
         "name": "Model C (XLM-R Base)",
         "base_model": "xlm-roberta-base",
         "output_dir": os.path.join(MODELS_DIR, "model_c_xlmr"),
-        "learning_rate": 2e-5,
+        "learning_rates": SEARCH_RATES, 
         "num_epochs": 10,
-        "batch_size": 16
+        "batch_size": 16 
     }
 ]
 
@@ -64,163 +84,152 @@ def compute_metrics(eval_pred):
     f1 = f1_score(labels, predictions, average='macro')
     return {"accuracy": acc, "macro_f1": f1}
 
-def train_model(config, tokenized_datasets, tokenizer):
-    print(f"\n=== Training {config['name']} ===")
-    
-    if os.path.exists(config['output_dir']):
-        shutil.rmtree(config['output_dir'])
-
-    model = AutoModelForSequenceClassification.from_pretrained(
-        config['base_model'], 
-        num_labels=3
-    )
-    
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-    
-    training_args = TrainingArguments(
-        output_dir=config['output_dir'],
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        learning_rate=config['learning_rate'],
-        per_device_train_batch_size=config['batch_size'],
-        per_device_eval_batch_size=config['batch_size'],
-        num_train_epochs=config['num_epochs'],
-        weight_decay=0.01,
-        warmup_ratio=0.1,
-        load_best_model_at_end=True,
-        metric_for_best_model="macro_f1",
-        report_to="none"
-    )
-
-    import time
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_datasets["train"],
-        eval_dataset=tokenized_datasets["validation"],
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=4)]
-    )
-
-    # Reset GPU memory tracker before training starts
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
-        
-    start_time = time.time()
-    
-    # Execute training
-    trainer.train()
-    
-    # Calculate total duration and peak memory
-    total_time = time.time() - start_time
-    avg_epoch_time = total_time / config['num_epochs']
-    
-    print(f"\n--- HARDWARE METRICS: {config['name']} ---")
-    print(f"Total Training Time: {total_time:.2f} seconds")
-    print(f"Average Time per Epoch: {avg_epoch_time:.2f} seconds")
-    
-    if torch.cuda.is_available():
-        peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
-        print(f"Peak GPU VRAM Allocated: {peak_vram_mb:.2f} MB")
-    print("-------------------------------------------\n")
-
-    trainer.save_model(config['output_dir'])
-
 def normalize_columns(df):
-    """Normalize column names to standard 'text' and 'label'."""
-    df.columns = [c.lower().strip() for c in df.columns]
+    """
+    Cleans the dataframe and ensures correct data types for training.
+    """
+    if 'text' not in df.columns and 'review' in df.columns:
+        df = df.rename(columns={'review': 'text'})
+    if 'label' not in df.columns and 'sentiment' in df.columns:
+        df = df.rename(columns={'sentiment': 'label'})
     
-    # 1. Normalize Text Column
-    text_candidates = ['review', 'text', 'content', 'sentence', 'body']
-    for candidate in text_candidates:
-        if candidate in df.columns:
-            df = df.rename(columns={candidate: 'text'})
-            break
-    
-    if 'text' not in df.columns:
-        raise ValueError(f"Could not find text column. Available: {df.columns}")
-
-    # 2. Normalize Label/Sentiment Column
-    label_candidates = ['sentiment', 'label', 'target', 'class']
-    label_col = None
-    for candidate in label_candidates:
-        if candidate in df.columns:
-            label_col = candidate
-            break
-    
-    if not label_col:
-        raise ValueError(f"Could not find label column. Available: {df.columns}")
-
-    # 3. Map Labels if they are strings
-    first_val = df[label_col].iloc[0]
-    if isinstance(first_val, str):
-        label_map = {'negative': 0, 'neutral': 1, 'positive': 2}
-        # Handle potential capitalization
-        df['label'] = df[label_col].astype(str).str.lower().map(label_map)
-        
-        # Check for unmapped values
-        if df['label'].isnull().any():
-            print(f"[WARNING] Some labels could not be mapped. Unique values in '{label_col}': {df[label_col].unique()}")
-            df = df.dropna(subset=['label']) # Safe drop
-            df['label'] = df['label'].astype(int)
-    else:
-        # Assume already integer
-        df['label'] = df[label_col].astype(int)
+    # CRITICAL FIX: Cast labels to integer to avoid RuntimeError in PyTorch
+    df = df.dropna(subset=['text', 'label'])
+    df['label'] = df['label'].astype(int)
     
     return df[['text', 'label']]
 
+def clear_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
 def main():
-    print(f"Project Root: {BASE_DIR}")
+    print("=== STAGE 2: SUPERVISED FINE-TUNING (GRID SEARCH + VRAM LOGGING) ===")
+    
     train_path = os.path.join(DATA_DIR, 'train.csv')
     val_path = os.path.join(DATA_DIR, 'val.csv')
-    
-    if not os.path.exists(train_path):
-        print(f"[ERROR] Data missing: {train_path}")
+
+    if not os.path.exists(train_path) or not os.path.exists(val_path):
+        print(f"[ERROR] Datasets missing in {DATA_DIR}")
         return
 
-    print("Loading datasets...")
-    train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
-    
-    # --- ROBUST NORMALIZATION ---
-    print("Normalizing columns...")
-    try:
-        train_df = normalize_columns(train_df)
-        val_df = normalize_columns(val_df)
-    except ValueError as e:
-        print(f"[ERROR] Data format issue: {e}")
-        return
-
-    print(f"Training on {len(train_df)} samples, Validating on {len(val_df)} samples.")
+    train_df = normalize_columns(pd.read_csv(train_path))
+    val_df = normalize_columns(pd.read_csv(val_path))
     
     raw_datasets = DatasetDict({
         "train": Dataset.from_pandas(train_df),
         "validation": Dataset.from_pandas(val_df)
     })
 
+    all_search_results = []
+
     for config in TRAINING_CONFIGS:
-        if "stage1_dapt" in config['base_model']:
-            tokenizer_source = config['base_model']
-        elif "xlm" in config['base_model']:
-            tokenizer_source = "xlm-roberta-base"
-        else:
-            tokenizer_source = "distilbert-base-multilingual-cased"
-            
-        # Ensure tokenizer source exists
-        if not os.path.exists(tokenizer_source) and '/' in tokenizer_source and not tokenizer_source.count('/') == 1: 
-             # It's a path that doesn't exist, revert to base to avoid crash
-             print(f"[WARNING] Tokenizer path {tokenizer_source} not found. Fallback to base.")
+        print(f"\n--- Initiating Grid Search for {config['name']} ---")
+        
+        tokenizer_source = config['base_model']
+        if not os.path.exists(tokenizer_source) and '/' in tokenizer_source: 
              tokenizer_source = "distilbert-base-multilingual-cased"
 
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
 
         def tokenize_function(examples):
-            return tokenizer(examples["text"], truncation=True, max_length=MAX_LEN)
+            return tokenizer(examples["text"], truncation=True, padding='max_length', max_length=MAX_LEN)
 
         tokenized_datasets = raw_datasets.map(tokenize_function, batched=True)
-        train_model(config, tokenized_datasets, tokenizer)
+        data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+        
+        best_f1 = 0.0
+        best_lr = None
+        best_temp_dir = ""
+
+        for lr in config['learning_rates']:
+            print(f"\n[TESTING] Learning Rate: {lr}")
+            temp_output_dir = f"{config['output_dir']}_TEMP_LR_{lr}"
+            
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+
+            model = AutoModelForSequenceClassification.from_pretrained(
+                config['base_model'], 
+                num_labels=3,
+                problem_type="single_label_classification"
+            )
+
+            training_args = TrainingArguments(
+                output_dir=temp_output_dir,
+                evaluation_strategy="epoch",
+                save_strategy="epoch",
+                learning_rate=lr,
+                per_device_train_batch_size=config['batch_size'],
+                per_device_eval_batch_size=config['batch_size'],
+                num_train_epochs=config['num_epochs'],
+                weight_decay=0.01,
+                warmup_ratio=0.1,
+                load_best_model_at_end=True,
+                metric_for_best_model="macro_f1",
+                greater_is_better=True,
+                save_total_limit=1,
+                fp16=torch.cuda.is_available(),
+                report_to="none"
+            )
+
+            trainer = Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=tokenized_datasets["train"],
+                eval_dataset=tokenized_datasets["validation"],
+                tokenizer=tokenizer,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics,
+                callbacks=[EarlyStoppingCallback(early_stopping_patience=4)]
+            )
+
+            trainer.train()
+            metrics = trainer.evaluate()
+            current_f1 = metrics['eval_macro_f1']
+            
+            # --- CRITICAL ADDITION: Explicitly dump the model and config to the root directory ---
+            trainer.save_model(temp_output_dir)
+            tokenizer.save_pretrained(temp_output_dir)
+            
+            vram_mb = 0
+            if torch.cuda.is_available():
+                vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+
+            print(f"[RESULT] LR {lr} | F1: {current_f1:.4f} | Peak VRAM: {vram_mb:.2f} MB")
+            
+            all_search_results.append({
+                "Model_Name": config['name'],
+                "Learning_Rate": lr,
+                "Macro_F1": current_f1,
+                "Peak_VRAM_MB": round(vram_mb, 2)
+            })
+
+            if current_f1 > best_f1:
+                best_f1 = current_f1
+                best_lr = lr
+                best_temp_dir = temp_output_dir
+            
+            del model, trainer
+            clear_memory()
+
+        print(f"\n[WINNER] Best LR for {config['name']} is {best_lr} (F1: {best_f1:.4f})")
+        
+        if os.path.exists(config['output_dir']):
+            shutil.rmtree(config['output_dir'])
+            
+        shutil.copytree(best_temp_dir, config['output_dir'])
+        
+        for lr in config['learning_rates']:
+            temp_dir = f"{config['output_dir']}_TEMP_LR_{lr}"
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+
+    summary_df = pd.DataFrame(all_search_results)
+    summary_path = os.path.join(REPORTS_DIR, "finetuning_grid_search_results.csv")
+    summary_df.to_csv(summary_path, index=False)
+    print(f"\n[SUCCESS] Grid search summary saved to {summary_path}")
 
 if __name__ == "__main__":
     main()

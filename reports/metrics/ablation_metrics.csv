@@ -1,2 +1,2 @@
-Model,Macro F1 Score,Accuracy,Evaluation Loss
-Authentic-Only DAPT (Ablation),0.8074306123643682,0.8062977099236641,0.7204015851020813
+Model,Macro F1 Score,Accuracy,Data_Source
+Authentic-Only DAPT (Ablation),0.7946,0.7929,Official Test Set

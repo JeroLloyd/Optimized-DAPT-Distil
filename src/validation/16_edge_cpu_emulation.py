@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import torch
 import pandas as pd
@@ -9,7 +8,6 @@ import seaborn as sns
 import onnxruntime as ort
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from optimum.onnxruntime import ORTModelForSequenceClassification
-from sklearn.metrics import f1_score
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -32,15 +30,15 @@ SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
 
 DATA_PATH = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final', 'test.csv')
+FINAL_METRICS_PATH = os.path.join(BASE_DIR, 'reports', 'metrics', 'final_metrics.csv')
 MODEL_A_DIR = os.path.join(BASE_DIR, 'models', 'model_a_base')
 MODEL_B_DIR = os.path.join(BASE_DIR, 'models', 'model_b_dapt')
 MODEL_C_DIR = os.path.join(BASE_DIR, 'models', 'model_c_xlmr')
 MODEL_D_DIR = os.path.join(BASE_DIR, 'models', 'model_d_onnx')
-REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
 FIGURES_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
 
-os.makedirs(REPORTS_DIR, exist_ok=True)
 os.makedirs(FIGURES_DIR, exist_ok=True)
+MAX_LATENCY_SAMPLES = 200
 
 def safe_load_tokenizer(model_path, fallback_name):
     try:
@@ -48,74 +46,65 @@ def safe_load_tokenizer(model_path, fallback_name):
     except Exception:
         return AutoTokenizer.from_pretrained(fallback_name)
 
-def benchmark_pytorch_edge(model_path, texts, true_labels, cores, fallback_tokenizer):
-    torch.set_num_threads(cores)
-    
+def get_official_f1(model_name):
+    """Fetches the official F1 from Stage 8 for consistent reporting."""
+    try:
+        if os.path.exists(FINAL_METRICS_PATH):
+            df = pd.read_csv(FINAL_METRICS_PATH)
+            row = df[df['Model Name'] == model_name]
+            if not row.empty:
+                return float(row.iloc[0]['Macro F1 Score'])
+    except Exception as e:
+        print(f"  [WARN] Could not sync official metrics: {e}")
+    return 0.0
+
+def measure_latency(model_path, texts, cores, fallback_tokenizer, is_onnx=False):
+    """Profiles hardware latency using specified core limits."""
     tokenizer = safe_load_tokenizer(model_path, fallback_tokenizer)
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
-    model.to("cpu")
-    model.eval()
+    latencies = []
     
-    warmup = tokenizer(texts[0], return_tensors="pt", truncation=True, max_length=128)
-    if "distilbert" in fallback_tokenizer:
-        warmup.pop("token_type_ids", None)
+    # Randomly sample to reduce execution time while maintaining statistical validity
+    np.random.seed(42)
+    sample_indices = np.random.choice(len(texts), min(MAX_LATENCY_SAMPLES, len(texts)), replace=False)
+    sampled_texts = [texts[i] for i in sample_indices]
     
-    with torch.no_grad():
+    if is_onnx:
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = cores
+        model = ORTModelForSequenceClassification.from_pretrained(
+            model_path, provider="CPUExecutionProvider", session_options=options
+        )
+        
+        warmup = tokenizer(sampled_texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
+        if "distilbert" in fallback_tokenizer: warmup.pop("token_type_ids", None)
         _ = model(**warmup)
 
-    latencies = []
-    predictions = []
-    
-    for text in texts:
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
-        if "distilbert" in fallback_tokenizer:
-            inputs.pop("token_type_ids", None)
+        for text in sampled_texts:
+            inputs = tokenizer(text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
+            if "distilbert" in fallback_tokenizer: inputs.pop("token_type_ids", None)
+            
+            start = time.perf_counter()
+            _ = model(**inputs)
+            latencies.append((time.perf_counter() - start) * 1000)
+    else:
+        torch.set_num_threads(cores)
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        model.to("cpu")
+        model.eval()
         
-        start = time.perf_counter()
-        with torch.no_grad():
-            outputs = model(**inputs)
-        latencies.append((time.perf_counter() - start) * 1000)
-        
-        logits = outputs.logits[0].cpu().numpy()
-        predictions.append(np.argmax(logits))
-        
-    macro_f1 = f1_score(true_labels, predictions, average='macro')
-    return np.mean(latencies), macro_f1
+        warmup = tokenizer(sampled_texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
+        if "distilbert" in fallback_tokenizer: warmup.pop("token_type_ids", None)
+        with torch.no_grad(): _ = model(**warmup)
 
-def benchmark_onnx_edge(model_path, texts, true_labels, cores):
-    tokenizer = safe_load_tokenizer(model_path, "distilbert-base-multilingual-cased")
-    
-    options = ort.SessionOptions()
-    options.intra_op_num_threads = cores
-    options.inter_op_num_threads = 1 
-    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    
-    model = ORTModelForSequenceClassification.from_pretrained(
-        model_path, 
-        provider="CPUExecutionProvider",
-        session_options=options
-    )
-    
-    warmup = tokenizer(texts[0], return_tensors="pt", truncation=True, max_length=128)
-    warmup.pop("token_type_ids", None)
-    _ = model(**warmup)
-
-    latencies = []
-    predictions = []
-    
-    for text in texts:
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
-        inputs.pop("token_type_ids", None)
-        
-        start = time.perf_counter()
-        outputs = model(**inputs)
-        latencies.append((time.perf_counter() - start) * 1000)
-        
-        logits = outputs.logits[0]
-        predictions.append(np.argmax(logits))
-        
-    macro_f1 = f1_score(true_labels, predictions, average='macro')
-    return np.mean(latencies), macro_f1
+        for text in sampled_texts:
+            inputs = tokenizer(text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
+            if "distilbert" in fallback_tokenizer: inputs.pop("token_type_ids", None)
+            
+            start = time.perf_counter()
+            with torch.no_grad(): _ = model(**inputs)
+            latencies.append((time.perf_counter() - start) * 1000)
+            
+    return np.mean(latencies)
 
 def generate_visualizations(df):
     EDGE_DIR = os.path.join(FIGURES_DIR, "08_edge_hardware_emulation_results")
@@ -135,33 +124,20 @@ def generate_visualizations(df):
     plt.close()
 
     g = sns.relplot(
-        data=df,
-        x='Latency_ms',
-        y='Macro_F1',
-        hue='Model',
-        col='Emulated_Device',
-        col_wrap=2,
-        kind='scatter',
-        s=300,
-        palette=palette,
-        height=4.5,
-        aspect=1.3,
-        edgecolor='black',
-        alpha=0.8
+        data=df, x='Latency_ms', y='Macro_F1', hue='Model', col='Emulated_Device',
+        col_wrap=2, kind='scatter', s=300, palette=palette, height=4.5, aspect=1.3,
+        edgecolor='black', alpha=0.8
     )
     
     g.fig.suptitle("Edge Efficiency: Latency vs. Accuracy", fontsize=16, fontweight='bold', y=1.05)
     g.set_axis_labels("Inference Latency (ms) [Lower is Better]", "Macro F1 Score [Higher is Better]", fontweight='bold')
     g.set_titles(col_template="{col_name}", size=13, weight='bold')
     sns.move_legend(g, "upper center", bbox_to_anchor=(0.5, -0.05), ncol=4, title=None, frameon=True)
-    
     plt.savefig(os.path.join(EDGE_DIR, "8b_edge_efficiency.png"), dpi=300, bbox_inches='tight')
     plt.close()
-    
+
 def main():
     print("=== EDGE HARDWARE EMULATION BENCHMARK ===")
-    
-    torch.set_num_interop_threads(1)
     
     if not os.path.exists(DATA_PATH):
         print(f"[ERROR] Test data not found: {DATA_PATH}")
@@ -169,8 +145,7 @@ def main():
         
     df = pd.read_csv(DATA_PATH)
     text_col = 'review' if 'review' in df.columns else 'text'
-    texts = df[text_col].tolist()[:100]
-    true_labels = df['label'].tolist()[:100]
+    texts = df[text_col].tolist()
     
     hardware_profiles = [
         {"name": "IoT Sensor Node", "cores": 1},
@@ -179,37 +154,43 @@ def main():
         {"name": "Low-End Laptop", "cores": 4}
     ]
     
-    results = []
+    models_to_test = [
+        ("Model A (Base DistilBERT)", MODEL_A_DIR, "distilbert-base-multilingual-cased", False),
+        ("Model B (DAPT-DistilBERT)", MODEL_B_DIR, "distilbert-base-multilingual-cased", False),
+        ("Model C (XLM-R Base)", MODEL_C_DIR, "xlm-roberta-base", False),
+        ("Model D (Optimized DAPT)", MODEL_D_DIR, "distilbert-base-multilingual-cased", True)
+    ]
 
+    results = []
+    dynamic_f1_cache = {}
+
+    print("Phase 1: Syncing official F1 scores...")
+    for name, path, tokenizer_name, is_onnx in models_to_test:
+        if os.path.exists(path):
+            f1 = get_official_f1(name)
+            dynamic_f1_cache[name] = f1
+            print(f"  Synced {name}: {f1:.4f}")
+
+    print("\nPhase 2: Profiling hardware latency constraints...")
     for profile in hardware_profiles:
         cores = profile["cores"]
-        core_label = "Core" if cores == 1 else "Cores"
-        device_name = f"{profile['name']}\n({cores} {core_label})"
+        device_name = f"{profile['name']}\n({cores} Cores)"
+        print(f"\nEmulating {profile['name']} ({cores} Cores)...")
         
-        print(f"\nEmulating {profile['name']} ({cores} {core_label})...")
-        
-        if os.path.exists(MODEL_A_DIR):
-            print("  Testing Model A (PyTorch)...")
-            lat, f1 = benchmark_pytorch_edge(MODEL_A_DIR, texts, true_labels, cores, "distilbert-base-multilingual-cased")
-            results.append({"Emulated_Device": device_name, "Model": "Model A (Base DistilBERT)", "Macro_F1": f1, "Latency_ms": lat})
-            
-        if os.path.exists(MODEL_B_DIR):
-            print("  Testing Model B (PyTorch)...")
-            lat, f1 = benchmark_pytorch_edge(MODEL_B_DIR, texts, true_labels, cores, "distilbert-base-multilingual-cased")
-            results.append({"Emulated_Device": device_name, "Model": "Model B (DAPT-DistilBERT)", "Macro_F1": f1, "Latency_ms": lat})
-            
-        if os.path.exists(MODEL_C_DIR):
-            print("  Testing Model C (PyTorch)...")
-            lat, f1 = benchmark_pytorch_edge(MODEL_C_DIR, texts, true_labels, cores, "xlm-roberta-base")
-            results.append({"Emulated_Device": device_name, "Model": "Model C (XLM-R Base)", "Macro_F1": f1, "Latency_ms": lat})
-        
-        if os.path.exists(MODEL_D_DIR):
-            print("  Testing Model D (ONNX)...")
-            lat, f1 = benchmark_onnx_edge(MODEL_D_DIR, texts, true_labels, cores)
-            results.append({"Emulated_Device": device_name, "Model": "Model D (Optimized DAPT)", "Macro_F1": f1, "Latency_ms": lat})
+        for name, path, tokenizer_name, is_onnx in models_to_test:
+            if os.path.exists(path):
+                print(f"  Profiling {name}...")
+                lat = measure_latency(path, texts, cores, tokenizer_name, is_onnx)
+                
+                results.append({
+                    "Emulated_Device": device_name,
+                    "Model": name,
+                    "Macro_F1": dynamic_f1_cache[name],
+                    "Latency_ms": lat
+                })
 
     results_df = pd.DataFrame(results)
-    results_df = results_df.round({"Macro_F1": 4, "Latency_ms": 2})
+    results_df["Latency_ms"] = results_df["Latency_ms"].round(2)
 
     EDGE_DIR = os.path.join(FIGURES_DIR, "08_edge_hardware_emulation_results")
     os.makedirs(EDGE_DIR, exist_ok=True)
@@ -223,8 +204,6 @@ def main():
     generate_visualizations(results_df)
     
     print(f"\n[SUCCESS] Emulation data saved to: {csv_path}")
-    print(f"[SUCCESS] Visual charts saved to: {EDGE_DIR}")
-    print("\n--- FINAL HARDWARE BENCHMARK RESULTS ---")
     print(csv_df.to_string(index=False))
 
 if __name__ == "__main__":

@@ -1,3 +1,3 @@
 Model Name,Short_Name,Latency_ms
-XLM-R Base,XLM-R Base,59.29323034350973
-Optimized DAPT,Optimized DAPT,3.910326812973586
+Model C (XLM-R Base),C (XLM-R Base),7.13
+Model D (Optimized DAPT),D (Optimized DAPT),12.02

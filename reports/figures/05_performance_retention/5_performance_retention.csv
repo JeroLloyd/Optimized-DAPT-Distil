@@ -1,5 +1,5 @@
 Model Name,Short_Name,Retention_Pct
-Base DistilBERT,Base Distil,96.61087278375045
-DAPT-DistilBERT,DAPT-Distil,99.5453699144419
-XLM-R Base,XLM-R Base,100.0
-Optimized DAPT,Optimized DAPT,98.15976092407246
+Model A (Base DistilBERT),A (Base Distil),96.15571186029591
+Model B (DAPT-DistilBERT),B (DAPT-Distil),97.73223381033227
+Model C (XLM-R Base),C (XLM-R Base),100.0
+Model D (Optimized DAPT),D (Optimized DAPT),97.72010671840891

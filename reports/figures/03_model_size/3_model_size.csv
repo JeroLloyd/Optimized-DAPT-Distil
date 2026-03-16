@@ -1,5 +1,5 @@
 Model Name,Short_Name,Storage_MB
-Base DistilBERT,Base Distil,519.9843044281006
-DAPT-DistilBERT,DAPT-Distil,519.9848766326904
-XLM-R Base,XLM-R Base,1076.9832544326782
-Optimized DAPT,Optimized DAPT,133.19016456604004
+Model A (Base DistilBERT),A (Base Distil),1552.55
+Model B (DAPT-DistilBERT),B (DAPT-Distil),1552.55
+Model C (XLM-R Base),C (XLM-R Base),3203.32
+Model D (Optimized DAPT),D (Optimized DAPT),133.21

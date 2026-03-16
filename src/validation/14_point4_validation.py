@@ -117,7 +117,7 @@ def main():
         )
         
         args = TrainingArguments(
-            output_dir=f"./temp_seed_{seed}", num_train_epochs=4, learning_rate=2e-5, 
+            output_dir=f"./temp_seed_{seed}", num_train_epochs=8, learning_rate=2e-5, 
             per_device_train_batch_size=32, evaluation_strategy="epoch", save_strategy="no", report_to="none"
         )
         
