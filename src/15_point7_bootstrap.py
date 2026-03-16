@@ -5,9 +5,9 @@ from datasets import Dataset
 from sklearn.metrics import f1_score
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer
 
-# --- PATHS ---
+# --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = SCRIPT_DIR if os.path.basename(SCRIPT_DIR) != "src" else os.path.dirname(SCRIPT_DIR)
 FIRECS_DIR = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 

@@ -11,9 +11,9 @@ from transformers import (
     TrainingArguments, Trainer, set_seed
 )
 
-# --- PATHS ---
+# --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = SCRIPT_DIR if os.path.basename(SCRIPT_DIR) != "src" else os.path.dirname(SCRIPT_DIR)
 FIRECS_DIR = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 FIG_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
@@ -56,15 +56,15 @@ def main():
     cm_b = confusion_matrix(y_true, y_pred_b)
 
     # --- EXPORT CONFUSION MATRICES TO CSV ---
-    REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
-    os.makedirs(REPORTS_DIR, exist_ok=True)
+    CM_DIR = os.path.join(FIG_DIR, '07_cm_comparison')
+    os.makedirs(CM_DIR, exist_ok=True)
     
     cm_a_df = pd.DataFrame(cm_a, index=labels, columns=[f"Pred_{l}" for l in labels])
-    cm_a_csv_path = os.path.join(REPORTS_DIR, 'cm_comparison_model_a.csv')
+    cm_a_csv_path = os.path.join(CM_DIR, 'cm_comparison_model_a.csv')
     cm_a_df.to_csv(cm_a_csv_path)
     
     cm_b_df = pd.DataFrame(cm_b, index=labels, columns=[f"Pred_{l}" for l in labels])
-    cm_b_csv_path = os.path.join(REPORTS_DIR, 'cm_comparison_model_b.csv')
+    cm_b_csv_path = os.path.join(CM_DIR, 'cm_comparison_model_b.csv')
     cm_b_df.to_csv(cm_b_csv_path)
     
     print(f"SUCCESS: Exported Model A CSV to {cm_a_csv_path}")
@@ -83,7 +83,7 @@ def main():
     axes[1].set_xlabel('Predicted Sentiment', fontweight='bold')
     
     plt.tight_layout()
-    cm_path = os.path.join(FIG_DIR, 'cm_comparison.png')
+    cm_path = os.path.join(CM_DIR, 'cm_comparison.png')
     plt.savefig(cm_path, dpi=300)
     print(f"SUCCESS: Comparative CM saved to {cm_path}\n")
 

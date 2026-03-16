@@ -117,10 +117,12 @@ def benchmark_onnx_edge(model_path, texts, true_labels, cores):
     return np.mean(latencies), macro_f1
 
 def generate_visualizations(df):
+    EDGE_DIR = os.path.join(FIGURES_DIR, "08_edge_hardware_emulation_results")
+    os.makedirs(EDGE_DIR, exist_ok=True)
+
     sns.set_theme(style="whitegrid", rc={"axes.facecolor": "#f8f9fa"})
     palette = ["#7f8c8d", "#3498db", "#e74c3c", "#2ecc71"]
     
-    # Image 1: Latency Comparison
     plt.figure(figsize=(14, 7))
     sns.barplot(data=df, x='Emulated_Device', y='Latency_ms', hue='Model', palette=palette)
     plt.title("Inference Latency Across Edge Devices", fontsize=16, fontweight='bold', pad=15)
@@ -128,10 +130,9 @@ def generate_visualizations(df):
     plt.xlabel("Emulated Hardware Profile", fontsize=12, fontweight='bold')
     plt.legend(title=None, bbox_to_anchor=(1.02, 1), loc='upper left')
     plt.tight_layout()
-    plt.savefig(os.path.join(FIGURES_DIR, "8a_edge_latency.png"), dpi=300)
+    plt.savefig(os.path.join(EDGE_DIR, "8a_edge_latency.png"), dpi=300)
     plt.close()
 
-    # Image 2: Efficiency Trade-off (Faceted Small Multiples)
     g = sns.relplot(
         data=df,
         x='Latency_ms',
@@ -153,9 +154,9 @@ def generate_visualizations(df):
     g.set_titles(col_template="{col_name}", size=13, weight='bold')
     sns.move_legend(g, "upper center", bbox_to_anchor=(0.5, -0.05), ncol=4, title=None, frameon=True)
     
-    plt.savefig(os.path.join(FIGURES_DIR, "8b_edge_efficiency.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(EDGE_DIR, "8b_edge_efficiency.png"), dpi=300, bbox_inches='tight')
     plt.close()
-
+    
 def main():
     print("=== EDGE HARDWARE EMULATION BENCHMARK ===")
     
@@ -209,7 +210,9 @@ def main():
     results_df = pd.DataFrame(results)
     results_df = results_df.round({"Macro_F1": 4, "Latency_ms": 2})
 
-    csv_path = os.path.join(REPORTS_DIR, "edge_hardware_emulation_results.csv")
+    EDGE_DIR = os.path.join(FIGURES_DIR, "08_edge_hardware_emulation_results")
+    os.makedirs(EDGE_DIR, exist_ok=True)
+    csv_path = os.path.join(EDGE_DIR, "edge_hardware_emulation_results.csv")
     
     csv_df = results_df.copy()
     csv_df["Emulated_Device"] = csv_df["Emulated_Device"].str.replace("\n", " ")
@@ -219,7 +222,7 @@ def main():
     generate_visualizations(results_df)
     
     print(f"\n[SUCCESS] Emulation data saved to: {csv_path}")
-    print(f"[SUCCESS] Visual charts saved to: {FIGURES_DIR}")
+    print(f"[SUCCESS] Visual charts saved to: {EDGE_DIR}")
     print("\n--- FINAL HARDWARE BENCHMARK RESULTS ---")
     print(csv_df.to_string(index=False))
 

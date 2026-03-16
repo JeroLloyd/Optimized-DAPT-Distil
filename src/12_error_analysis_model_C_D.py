@@ -44,6 +44,7 @@ from optimum.onnxruntime import ORTModelForSequenceClassification
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = SCRIPT_DIR if os.path.basename(SCRIPT_DIR) != "src" else os.path.dirname(SCRIPT_DIR)
 
 # Resolve root directory whether script is in root or src/
 if os.path.basename(SCRIPT_DIR) == "src":

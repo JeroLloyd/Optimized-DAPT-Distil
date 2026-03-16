@@ -8,10 +8,10 @@ from scipy.interpolate import make_interp_spline
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = SCRIPT_DIR if os.path.basename(SCRIPT_DIR) != "src" else os.path.dirname(SCRIPT_DIR)
 
 METRICS_PATH = os.path.join(BASE_DIR, 'reports', 'metrics', 'final_metrics.csv')
-BENCHMARK_PATH = os.path.join(BASE_DIR, 'reports', 'metrics', 'benchmark_results.csv')
+BENCHMARK_PATH = os.path.join(BASE_DIR, 'reports', 'metrics', 'benchmark_results_academic.csv')
 FIGURES_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
 
 os.makedirs(FIGURES_DIR, exist_ok=True)
@@ -84,12 +84,13 @@ def generate_visualizations():
     
     # 1. Macro F1
     if "Macro_F1" in df.columns:
-        # Save Source Data CSV
-        csv_path = os.path.join(FIGURES_DIR, "1_macro_f1_score.csv")
+        dir_01 = os.path.join(FIGURES_DIR, "01_macro_f1_score")
+        os.makedirs(dir_01, exist_ok=True)
+        
+        csv_path = os.path.join(dir_01, "1_macro_f1_score.csv")
         df[["Model Name", "Short_Name", "Macro_F1"]].to_csv(csv_path, index=False)
         print(f"Saved Data: {csv_path}")
 
-        # Generate Plot
         plt.figure(figsize=(10, 6))
         ax = sns.barplot(
             x="Short_Name", y="Macro_F1", data=df, 
@@ -104,18 +105,19 @@ def generate_visualizations():
             if p.get_height() > 0:
                 ax.annotate(f'{p.get_height():.4f}', (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
-        plt.savefig(os.path.join(FIGURES_DIR, "1_macro_f1_score.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(dir_01, "1_macro_f1_score.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print("Saved Image: 1_macro_f1_score.png")
 
     # 2. Latency
     if "Latency_ms" in df.columns:
-        # Save Source Data CSV
-        csv_path = os.path.join(FIGURES_DIR, "2_inference_latency.csv")
+        dir_02 = os.path.join(FIGURES_DIR, "02_inference_latency")
+        os.makedirs(dir_02, exist_ok=True)
+
+        csv_path = os.path.join(dir_02, "2_inference_latency.csv")
         df[["Model Name", "Short_Name", "Latency_ms"]].to_csv(csv_path, index=False)
         print(f"Saved Data: {csv_path}")
 
-        # Generate Plot
         plt.figure(figsize=(10, 6))
         colors = ['#95a5a6' if 'Optimized' not in x else '#2ecc71' for x in df['Model Name']]
         ax = sns.barplot(
@@ -128,18 +130,19 @@ def generate_visualizations():
              if p.get_height() > 0:
                 ax.annotate(f'{p.get_height():.2f} ms', (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
-        plt.savefig(os.path.join(FIGURES_DIR, "2_inference_latency.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(dir_02, "2_inference_latency.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print("Saved Image: 2_inference_latency.png")
 
     # 3. Model Size
     if "Storage_MB" in df.columns:
-        # Save Source Data CSV
-        csv_path = os.path.join(FIGURES_DIR, "3_model_size.csv")
+        dir_03 = os.path.join(FIGURES_DIR, "03_model_size")
+        os.makedirs(dir_03, exist_ok=True)
+
+        csv_path = os.path.join(dir_03, "3_model_size.csv")
         df[["Model Name", "Short_Name", "Storage_MB"]].to_csv(csv_path, index=False)
         print(f"Saved Data: {csv_path}")
 
-        # Generate Plot
         plt.figure(figsize=(10, 6))
         ax = sns.barplot(
             x="Short_Name", y="Storage_MB", data=df, 
@@ -151,7 +154,7 @@ def generate_visualizations():
              if p.get_height() > 0:
                 ax.annotate(f'{p.get_height():.1f} MB', (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
-        plt.savefig(os.path.join(FIGURES_DIR, "3_model_size.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(dir_03, "3_model_size.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print("Saved Image: 3_model_size.png")
     else:
@@ -159,12 +162,13 @@ def generate_visualizations():
 
     # 4. Speedup
     if "Speedup" in df.columns:
-        # Save Source Data CSV
-        csv_path = os.path.join(FIGURES_DIR, "4_speedup_factor.csv")
+        dir_04 = os.path.join(FIGURES_DIR, "04_speedup_factor")
+        os.makedirs(dir_04, exist_ok=True)
+
+        csv_path = os.path.join(dir_04, "4_speedup_factor.csv")
         df[["Model Name", "Short_Name", "Speedup"]].to_csv(csv_path, index=False)
         print(f"Saved Data: {csv_path}")
 
-        # Generate Plot
         plt.figure(figsize=(10, 6))
         ax = sns.barplot(
             x="Short_Name", y="Speedup", data=df, 
@@ -177,18 +181,19 @@ def generate_visualizations():
              if p.get_height() > 0:
                 ax.annotate(f'{p.get_height():.2f}x', (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
-        plt.savefig(os.path.join(FIGURES_DIR, "4_speedup_factor.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(dir_04, "4_speedup_factor.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print("Saved Image: 4_speedup_factor.png")
 
     # 5. Retention
     if "Retention_Pct" in df.columns:
-        # Save Source Data CSV
-        csv_path = os.path.join(FIGURES_DIR, "5_performance_retention.csv")
+        dir_05 = os.path.join(FIGURES_DIR, "05_performance_retention")
+        os.makedirs(dir_05, exist_ok=True)
+
+        csv_path = os.path.join(dir_05, "5_performance_retention.csv")
         df[["Model Name", "Short_Name", "Retention_Pct"]].to_csv(csv_path, index=False)
         print(f"Saved Data: {csv_path}")
 
-        # Generate Plot
         plt.figure(figsize=(10, 6))
         ax = sns.barplot(
             x="Short_Name", y="Retention_Pct", data=df, 
@@ -201,20 +206,21 @@ def generate_visualizations():
              if p.get_height() > 0:
                 ax.annotate(f'{p.get_height():.1f}%', (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='bottom', fontsize=11, fontweight='bold', xytext=(0, 5), textcoords='offset points')
-        plt.savefig(os.path.join(FIGURES_DIR, "5_performance_retention.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(dir_05, "5_performance_retention.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print("Saved Image: 5_performance_retention.png")
 
     # 6. Pareto Frontier
     if "Latency_ms" in df.columns and "Macro_F1" in df.columns:
+        dir_06 = os.path.join(FIGURES_DIR, "06_pareto_frontier")
+        os.makedirs(dir_06, exist_ok=True)
+
         df_pareto = df.copy().sort_values("Latency_ms")
         
-        # Save Source Data CSV (Sorted)
-        csv_path = os.path.join(FIGURES_DIR, "6_pareto_frontier.csv")
+        csv_path = os.path.join(dir_06, "6_pareto_frontier.csv")
         df_pareto[["Model Name", "Short_Name", "Latency_ms", "Macro_F1"]].to_csv(csv_path, index=False)
         print(f"Saved Data: {csv_path}")
 
-        # Generate Plot
         x = df_pareto["Latency_ms"].values
         y = df_pareto["Macro_F1"].values
 
@@ -246,7 +252,7 @@ def generate_visualizations():
         ax.set_ylabel("Macro F1 Score", fontsize=13, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.6)
 
-        plt.savefig(os.path.join(FIGURES_DIR, "6_pareto_frontier.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(dir_06, "6_pareto_frontier.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print("Saved Image: 6_pareto_frontier.png")
 
