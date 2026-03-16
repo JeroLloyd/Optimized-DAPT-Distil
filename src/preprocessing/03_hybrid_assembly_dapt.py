@@ -8,7 +8,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = os.path.dirname(SRC_DIR)
 INTERIM_DIR = os.path.join(BASE_DIR, 'data', '02_interim')
 PROCESSED_DIR = os.path.join(BASE_DIR, 'data', '03_processed')
 REPORT_DIR = os.path.join(INTERIM_DIR, 'dedup_reports')

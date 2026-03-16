@@ -17,7 +17,8 @@ from sklearn.metrics import accuracy_score, f1_score
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = os.path.dirname(SRC_DIR)
 DATA_DIR = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 

@@ -7,7 +7,8 @@ from sklearn.model_selection import train_test_split
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = os.path.dirname(SRC_DIR)
 # Raw files are expected in data/01_raw/FireCS/
 RAW_DIR = os.path.join(BASE_DIR, 'data', '01_raw', 'FireCS')
 PROCESSED_DIR = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final')

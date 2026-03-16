@@ -18,11 +18,9 @@ except Exception:
     pass
 
 # --- PATH CONFIGURATION ---
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if os.path.exists(os.path.join(CURRENT_DIR, 'models')):
-    BASE_DIR = CURRENT_DIR
-else:
-    BASE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = os.path.dirname(SRC_DIR)
 
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 RESULTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')

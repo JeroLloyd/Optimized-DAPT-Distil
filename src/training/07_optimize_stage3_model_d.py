@@ -61,7 +61,8 @@ from optimum.onnxruntime import ORTModelForSequenceClassification, ORTQuantizer
 from optimum.onnxruntime.configuration import AutoQuantizationConfig
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = os.path.dirname(SRC_DIR)
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 
 # Input: Model B
