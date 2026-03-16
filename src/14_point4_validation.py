@@ -51,17 +51,33 @@ def main():
     print("Evaluating Model B (DAPT Baseline)...")
     y_pred_b, _ = get_predictions(MODEL_B_PATH, test_ds)
     
+    labels = ['Negative', 'Neutral', 'Positive']
+    cm_a = confusion_matrix(y_true, y_pred_a)
+    cm_b = confusion_matrix(y_true, y_pred_b)
+
+    # --- EXPORT CONFUSION MATRICES TO CSV ---
+    REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    
+    cm_a_df = pd.DataFrame(cm_a, index=labels, columns=[f"Pred_{l}" for l in labels])
+    cm_a_csv_path = os.path.join(REPORTS_DIR, 'cm_comparison_model_a.csv')
+    cm_a_df.to_csv(cm_a_csv_path)
+    
+    cm_b_df = pd.DataFrame(cm_b, index=labels, columns=[f"Pred_{l}" for l in labels])
+    cm_b_csv_path = os.path.join(REPORTS_DIR, 'cm_comparison_model_b.csv')
+    cm_b_df.to_csv(cm_b_csv_path)
+    
+    print(f"SUCCESS: Exported Model A CSV to {cm_a_csv_path}")
+    print(f"SUCCESS: Exported Model B CSV to {cm_b_csv_path}")
+    
     # Plot Side-by-Side CM
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    labels = ['Negative', 'Neutral', 'Positive']
     
-    cm_a = confusion_matrix(y_true, y_pred_a)
     sns.heatmap(cm_a, annot=True, fmt='d', cmap='Blues', ax=axes[0], xticklabels=labels, yticklabels=labels)
     axes[0].set_title('Generic DistilmBERT (Model A)', fontweight='bold', pad=15)
     axes[0].set_ylabel('True Sentiment', fontweight='bold')
     axes[0].set_xlabel('Predicted Sentiment', fontweight='bold')
     
-    cm_b = confusion_matrix(y_true, y_pred_b)
     sns.heatmap(cm_b, annot=True, fmt='d', cmap='Greens', ax=axes[1], xticklabels=labels, yticklabels=labels)
     axes[1].set_title('DAPT-DistilmBERT (Model B)', fontweight='bold', pad=15)
     axes[1].set_xlabel('Predicted Sentiment', fontweight='bold')
@@ -83,7 +99,6 @@ def main():
     
     tokenizer = AutoTokenizer.from_pretrained(BASE_TOKENIZER)
     
-    # FIX: Added padding='max_length' to prevent DataLoader crash
     def tokenize_fn(x):
         return tokenizer(x["text"], truncation=True, max_length=128, padding='max_length')
 
