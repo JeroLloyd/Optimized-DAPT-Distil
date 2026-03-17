@@ -18,28 +18,18 @@ set_seed(42)
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 torch.use_deterministic_algorithms(True, warn_only=True)
 
-# --- SUPER-AGGRESSIVE MONKEY PATCH FOR TRANSFORMERS ---
+# Force single-threaded CPU execution for absolute latency consistency
+torch.set_num_threads(1)
+
+# --- AGGRESSIVE COMPATIBILITY PATCHES ---
 import transformers
 import transformers.models.auto
-
 class MockAutoModelForVision2Seq:
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
-        raise NotImplementedError("This is a mock class for compatibility.")
-
+        raise NotImplementedError("Mock class for compatibility.")
 setattr(transformers, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
 setattr(transformers.models.auto, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
-
-if "transformers" in sys.modules:
-    sys.modules["transformers"].AutoModelForVision2Seq = MockAutoModelForVision2Seq
-
-try:
-    if hasattr(transformers, "_import_structure"):
-        transformers._import_structure["models.auto"].append("AutoModelForVision2Seq")
-    if hasattr(transformers, "_class_to_module"):
-        transformers._class_to_module["AutoModelForVision2Seq"] = "models.auto"
-except Exception:
-    pass
 # ------------------------------------------------------
 
 # --- PATH CONFIGURATION ---
@@ -61,8 +51,7 @@ MODELS_TO_TEST = [
 
 def get_model_size_mb(path):
     total_size = 0
-    if not os.path.exists(path):
-        return 0
+    if not os.path.exists(path): return 0
     for dirpath, _, filenames in os.walk(path):
         for f in filenames:
             fp = os.path.join(dirpath, f)
@@ -76,11 +65,13 @@ def load_tokenizer_safe(model_path):
     except Exception:
         return AutoTokenizer.from_pretrained("distilbert-base-multilingual-cased")
 
-def evaluate_pytorch(path, texts, name):
+def evaluate_pytorch_cpu(path, texts, name):
+    """Forces PyTorch to use the CPU for fair hardware benchmarking."""
     tokenizer = load_tokenizer_safe(path)
     model = AutoModelForSequenceClassification.from_pretrained(path)
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Strictly enforce CPU
+    device = torch.device('cpu')
     model.to(device)
     model.eval()
     
@@ -99,16 +90,24 @@ def evaluate_pytorch(path, texts, name):
             outputs = model(**inputs)
         end_time = time.perf_counter()
         
-        logits = outputs.logits.cpu().numpy()
+        logits = outputs.logits.numpy()
         preds.append(np.argmax(logits, axis=-1)[0])
         latencies.append((end_time - start_time) * 1000)
         
     return preds, latencies
 
-def evaluate_onnx(path, texts, name):
+def evaluate_onnx_cpu(path, texts, name):
+    """Evaluates the quantized ONNX model using the CPU runtime."""
     tokenizer = load_tokenizer_safe(path)
+    # provider is strictly CPU
     model = ORTModelForSequenceClassification.from_pretrained(path, provider="CPUExecutionProvider")
     
+    # Warmup to initialize the ONNX session properly
+    warmup_inputs = tokenizer(texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
+    if "distilbert" in name.lower() and "token_type_ids" in warmup_inputs:
+        warmup_inputs.pop("token_type_ids")
+    _ = model(**warmup_inputs)
+
     preds = []
     latencies = []
     
@@ -128,7 +127,7 @@ def evaluate_onnx(path, texts, name):
     return preds, latencies
 
 def main():
-    print("--- STAGE 8: FINAL METRICS EVALUATION (DETERMINISTIC) ---")
+    print("--- STAGE 8: FINAL METRICS EVALUATION (FAIR CPU BENCHMARK) ---")
     
     if not os.path.exists(TEST_DATA_PATH):
         print(f"[ERROR] Test data not found: {TEST_DATA_PATH}")
@@ -141,9 +140,10 @@ def main():
     raw_results = []
     
     for model_id, name, path, runtime in MODELS_TO_TEST:
-        print(f"\nEvaluating {name}...")
+        print(f"\nEvaluating {name} strictly on CPU...")
         
         gc.collect()
+        # Ensure PyTorch releases GPU memory completely
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
        
@@ -153,27 +153,33 @@ def main():
            
         try:
             if runtime == "pytorch":
-                preds, latencies = evaluate_pytorch(path, texts, name)
+                preds, latencies = evaluate_pytorch_cpu(path, texts, name)
             else:
-                preds, latencies = evaluate_onnx(path, texts, name)
+                preds, latencies = evaluate_onnx_cpu(path, texts, name)
                
             acc = accuracy_score(labels, preds)
             f1 = f1_score(labels, preds, average='macro')
-            avg_lat = np.mean(latencies)
+            
+            # Extract specific latency metrics
+            avg_lat_overall = np.mean(latencies)
+            lat_100 = np.mean(latencies[:100]) if len(latencies) >= 100 else avg_lat_overall
+            lat_1000 = np.mean(latencies[:1000]) if len(latencies) >= 1000 else avg_lat_overall
             p95_lat = np.percentile(latencies, 95)
             size_mb = get_model_size_mb(path)
            
-            print(f"  Acc: {acc:.4f} | Macro F1: {f1:.4f} | Lat: {avg_lat:.2f}ms | Size: {size_mb:.2f}MB")
+            print(f"  Acc: {acc:.4f} | Macro F1: {f1:.4f} | Avg CPU Lat: {avg_lat_overall:.2f}ms")
            
             raw_results.append({
                 "Model ID": model_id,
                 "Model Name": name,
                 "Accuracy": round(acc, 4),
                 "Macro F1 Score": round(f1, 4),
-                "Avg Latency (ms)": round(avg_lat, 2),
+                "Avg Latency (100 runs) ms": round(lat_100, 2),
+                "Avg Latency (1000 runs) ms": round(lat_1000, 2),
+                "Avg Latency (Overall) ms": round(avg_lat_overall, 2),
                 "P95 Latency (ms)": round(p95_lat, 2),
                 "Model Size (MB)": round(size_mb, 2),
-                "Runtime": runtime.upper()
+                "Runtime": "CPU_ONLY"
             })
             
         except Exception as e:
@@ -182,13 +188,30 @@ def main():
     if raw_results:
         res_df = pd.DataFrame(raw_results)
         
-        if "Avg Latency (ms)" in res_df.columns and len(res_df) > 0:
-            base_lat = res_df.iloc[0]["Avg Latency (ms)"]
-            res_df["Speedup Factor"] = round(base_lat / res_df["Avg Latency (ms)"], 2)
+        if "Avg Latency (Overall) ms" in res_df.columns and len(res_df) > 0:
+            # Base latency is now the CPU latency of Model A
+            base_lat = res_df.iloc[0]["Avg Latency (Overall) ms"]
+            res_df["Speedup Factor"] = round(base_lat / res_df["Avg Latency (Overall) ms"], 2)
 
-        out_path = os.path.join(REPORTS_DIR, "final_metrics.csv")
-        res_df.to_csv(out_path, index=False)
-        print(f"\nSUCCESS: Results saved to {out_path}")
+        # --- EXPORT 1: MAIN RESULTS TABLE ---
+        main_cols = [
+            "Model ID", "Model Name", "Accuracy", "Macro F1 Score", 
+            "Avg Latency (Overall) ms", "P95 Latency (ms)", 
+            "Model Size (MB)", "Runtime", "Speedup Factor"
+        ]
+        main_path = os.path.join(REPORTS_DIR, "final_metrics.csv")
+        res_df[main_cols].to_csv(main_path, index=False)
+        
+        # --- EXPORT 2: HARDWARE STABILITY TABLE ---
+        stability_cols = [
+            "Model Name", "Avg Latency (100 runs) ms", 
+            "Avg Latency (1000 runs) ms", "Avg Latency (Overall) ms"
+        ]
+        stability_path = os.path.join(REPORTS_DIR, "latency_stability.csv")
+        res_df[stability_cols].to_csv(stability_path, index=False)
+        
+        print(f"\nSUCCESS: Main evaluation saved to {main_path}")
+        print(f"SUCCESS: Stability evaluation saved to {stability_path}")
 
 if __name__ == "__main__":
     main()

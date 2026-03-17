@@ -1,3 +1,4 @@
+# FILE: 10_visualize_results.py
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -52,7 +53,8 @@ def generate_visualizations():
     # --- FIX: ROBUST COLUMN MAPPING & DEDUPLICATION ---
     rename_map = {
         "Macro F1 Score": "Macro_F1",
-        "Avg Latency (ms)": "Latency_ms",
+        "Avg Latency (Overall) ms": "Latency_ms",  # Maps the new overall latency column
+        "Avg Latency (ms)": "Latency_ms",          # Fallback if old column exists
         "Speedup Factor": "Speedup"
     }
     df = df.rename(columns=rename_map)
@@ -79,7 +81,7 @@ def generate_visualizations():
 
     # --- PLOTTING & CSV GENERATION ---
     
-    # # 1. Macro F1
+    # 1. Macro F1
     if "Macro_F1" in df.columns:
         dir_01 = os.path.join(FIGURES_DIR, "01_macro_f1_score")
         os.makedirs(dir_01, exist_ok=True)
@@ -106,7 +108,7 @@ def generate_visualizations():
         plt.close()
         print("Saved Image: 1_macro_f1_score.png")
 
-    # # 2. Latency
+    # 2. Latency
     if "Latency_ms" in df.columns:
         dir_02 = os.path.join(FIGURES_DIR, "02_inference_latency")
         os.makedirs(dir_02, exist_ok=True)
@@ -131,7 +133,7 @@ def generate_visualizations():
         plt.close()
         print("Saved Image: 2_inference_latency.png")
 
-    # # 3. Model Size
+    # 3. Model Size
     if "Storage_MB" in df.columns:
         dir_03 = os.path.join(FIGURES_DIR, "03_model_size")
         os.makedirs(dir_03, exist_ok=True)
@@ -237,9 +239,7 @@ def generate_visualizations():
         else:
             print("[SKIP] Inter-Architecture Benchmarking (Missing latency data for XLM-R or Optimized DAPT).")
 
-    print(f"\n[COMPLETE] Speedup Figures and CSV files saved to: {dir_04}")
-
-    # # 5. Retention
+    # 5. Retention
     if "Retention_Pct" in df.columns:
         dir_05 = os.path.join(FIGURES_DIR, "05_performance_retention")
         os.makedirs(dir_05, exist_ok=True)
@@ -264,7 +264,7 @@ def generate_visualizations():
         plt.close()
         print("Saved Image: 5_performance_retention.png")
 
-    # # 6. Pareto Frontier
+    # 6. Pareto Frontier
     if "Latency_ms" in df.columns and "Macro_F1" in df.columns:
         dir_06 = os.path.join(FIGURES_DIR, "06_pareto_frontier")
         os.makedirs(dir_06, exist_ok=True)
@@ -310,7 +310,7 @@ def generate_visualizations():
         plt.close()
         print("Saved Image: 6_pareto_frontier.png")
 
-    print(f"\n[COMPLETE] Speedup Figures and CSV files saved to: {dir_04}")
+    print(f"\n[COMPLETE] All Visualizations and CSV files saved successfully to: {FIGURES_DIR}")
 
 if __name__ == "__main__":
     generate_visualizations()

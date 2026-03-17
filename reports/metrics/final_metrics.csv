@@ -1,5 +1,5 @@
-Model ID,Model Name,Accuracy,Macro F1 Score,Avg Latency (ms),P95 Latency (ms),Model Size (MB),Runtime,Speedup Factor
-A,Model A (Base DistilBERT),0.7901,0.7929,4.18,4.86,1552.55,PYTORCH,1.0
-B,Model B (DAPT-DistilBERT),0.8025,0.8059,4.03,5.03,1552.55,PYTORCH,1.04
-C,Model C (XLM-R Base),0.8235,0.8246,7.13,8.87,3203.32,PYTORCH,0.59
-D,Model D (Optimized DAPT),0.8034,0.8058,12.02,15.69,133.21,ONNX,0.35
+Model ID,Model Name,Accuracy,Macro F1 Score,Avg Latency (Overall) ms,P95 Latency (ms),Model Size (MB),Runtime,Speedup Factor
+A,Model A (Base DistilBERT),0.7901,0.7929,103.65,115.79,1552.55,CPU_ONLY,1.0
+B,Model B (DAPT-DistilBERT),0.8025,0.8059,141.21,435.73,1552.55,CPU_ONLY,0.73
+C,Model C (XLM-R Base),0.8235,0.8246,218.45,245.15,3203.32,CPU_ONLY,0.47
+D,Model D (Optimized DAPT),0.8034,0.8058,14.05,16.8,133.21,CPU_ONLY,7.38

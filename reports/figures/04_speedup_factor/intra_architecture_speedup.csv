@@ -1,3 +1,3 @@
 Model Name,Short_Name,Latency_ms
-Model B (DAPT-DistilBERT),B (DAPT-Distil),4.03
-Model D (Optimized DAPT),D (Optimized DAPT),12.02
+Model B (DAPT-DistilBERT),B (DAPT-Distil),141.21
+Model D (Optimized DAPT),D (Optimized DAPT),14.05
