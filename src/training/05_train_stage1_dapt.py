@@ -56,7 +56,7 @@ BATCH_SIZE = 16
 
 # CRITICAL SETTINGS FOR STABILITY
 LEARNING_RATE = 2e-5  
-EPOCHS = 8  # Optimized from 30 to 8 to prevent gradient instability and overfitting
+EPOCHS = 8  
 MLM_PROBABILITY = 0.15
 
 def main():
