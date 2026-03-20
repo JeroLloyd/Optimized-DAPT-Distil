@@ -6,6 +6,7 @@ import gc
 import pandas as pd
 import numpy as np
 import torch
+import onnxruntime as ort
 from sklearn.metrics import accuracy_score, f1_score
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, set_seed
 from optimum.onnxruntime import ORTModelForSequenceClassification
@@ -30,7 +31,6 @@ class MockAutoModelForVision2Seq:
         raise NotImplementedError("Mock class for compatibility.")
 setattr(transformers, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
 setattr(transformers.models.auto, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
-# ------------------------------------------------------
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,11 +43,23 @@ REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 MODELS_TO_TEST = [
-    ("A", "Model A (Base DistilBERT)", os.path.join(MODELS_DIR, "model_a_base"), "pytorch"),
-    ("B", "Model B (DAPT-DistilBERT)", os.path.join(MODELS_DIR, "model_b_dapt"), "pytorch"),
+    ("A", "Model A (Base DistilmBERT)", os.path.join(MODELS_DIR, "model_a_base"), "pytorch"),
+    ("B", "Model B (DAPT-DistilmBERT)", os.path.join(MODELS_DIR, "model_b_dapt"), "pytorch"),
     ("C", "Model C (XLM-R Base)", os.path.join(MODELS_DIR, "model_c_xlmr"), "pytorch"),
     ("D", "Model D (Optimized DAPT)", os.path.join(MODELS_DIR, "model_d_onnx"), "onnx")
 ]
+
+def normalize_columns(df):
+    """Syncs data cleaning with the training pipeline to maximize score."""
+    if 'text' not in df.columns and 'review' in df.columns:
+        df = df.rename(columns={'review': 'text'})
+    if 'label' not in df.columns and 'sentiment' in df.columns:
+        df = df.rename(columns={'sentiment': 'label'})
+    
+    # CRITICAL: Remove NaNs that might have entered the test set
+    df = df.dropna(subset=['text', 'label'])
+    df['label'] = df['label'].astype(int)
+    return df
 
 def get_model_size_mb(path):
     total_size = 0
@@ -70,11 +82,18 @@ def evaluate_pytorch_cpu(path, texts, name):
     tokenizer = load_tokenizer_safe(path)
     model = AutoModelForSequenceClassification.from_pretrained(path)
     
-    # Strictly enforce CPU
     device = torch.device('cpu')
     model.to(device)
     model.eval()
     
+    # Warmup
+    warmup_inputs = tokenizer(texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
+    if "distilbert" in name.lower() and "token_type_ids" in warmup_inputs:
+        warmup_inputs.pop("token_type_ids")
+    warmup_inputs = {k: v.to(device) for k, v in warmup_inputs.items()}
+    with torch.no_grad():
+        _ = model(**warmup_inputs)
+
     preds = []
     latencies = []
     
@@ -82,7 +101,6 @@ def evaluate_pytorch_cpu(path, texts, name):
         inputs = tokenizer(text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
         if "distilbert" in name.lower() and "token_type_ids" in inputs:
             inputs.pop("token_type_ids")
-            
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
         start_time = time.perf_counter()
@@ -97,12 +115,19 @@ def evaluate_pytorch_cpu(path, texts, name):
     return preds, latencies
 
 def evaluate_onnx_cpu(path, texts, name):
-    """Evaluates the quantized ONNX model using the CPU runtime."""
+    """Evaluates the quantized ONNX model using an optimized CPU runtime."""
     tokenizer = load_tokenizer_safe(path)
-    # provider is strictly CPU
-    model = ORTModelForSequenceClassification.from_pretrained(path, provider="CPUExecutionProvider")
+    sess_options = ort.SessionOptions()
+    sess_options.intra_op_num_threads = 1
+    sess_options.inter_op_num_threads = 1
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     
-    # Warmup to initialize the ONNX session properly
+    model = ORTModelForSequenceClassification.from_pretrained(
+        path, 
+        provider="CPUExecutionProvider",
+        session_options=sess_options
+    )
+    
     warmup_inputs = tokenizer(texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
     if "distilbert" in name.lower() and "token_type_ids" in warmup_inputs:
         warmup_inputs.pop("token_type_ids")
@@ -133,17 +158,20 @@ def main():
         print(f"[ERROR] Test data not found: {TEST_DATA_PATH}")
         return
 
-    df = pd.read_csv(TEST_DATA_PATH)
-    texts = df['review'].tolist() if 'review' in df.columns else df['text'].tolist()
+    # FIXED: Apply normalization before extracting lists to ensure scientific consistency
+    df_raw = pd.read_csv(TEST_DATA_PATH)
+    df = normalize_columns(df_raw)
+    
+    texts = df['text'].tolist()
     labels = df['label'].tolist()
     
     raw_results = []
+    raw_latencies_log = {} 
     
     for model_id, name, path, runtime in MODELS_TO_TEST:
         print(f"\nEvaluating {name} strictly on CPU...")
         
         gc.collect()
-        # Ensure PyTorch releases GPU memory completely
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
        
@@ -160,7 +188,6 @@ def main():
             acc = accuracy_score(labels, preds)
             f1 = f1_score(labels, preds, average='macro')
             
-            # Extract specific latency metrics
             avg_lat_overall = np.mean(latencies)
             lat_100 = np.mean(latencies[:100]) if len(latencies) >= 100 else avg_lat_overall
             lat_1000 = np.mean(latencies[:1000]) if len(latencies) >= 1000 else avg_lat_overall
@@ -182,6 +209,8 @@ def main():
                 "Runtime": "CPU_ONLY"
             })
             
+            raw_latencies_log[name] = latencies
+            
         except Exception as e:
             print(f"  [ERROR] Failed to evaluate {name}: {e}")
 
@@ -189,11 +218,9 @@ def main():
         res_df = pd.DataFrame(raw_results)
         
         if "Avg Latency (Overall) ms" in res_df.columns and len(res_df) > 0:
-            # Base latency is now the CPU latency of Model A
             base_lat = res_df.iloc[0]["Avg Latency (Overall) ms"]
             res_df["Speedup Factor"] = round(base_lat / res_df["Avg Latency (Overall) ms"], 2)
 
-        # --- EXPORT 1: MAIN RESULTS TABLE ---
         main_cols = [
             "Model ID", "Model Name", "Accuracy", "Macro F1 Score", 
             "Avg Latency (Overall) ms", "P95 Latency (ms)", 
@@ -202,7 +229,6 @@ def main():
         main_path = os.path.join(REPORTS_DIR, "final_metrics.csv")
         res_df[main_cols].to_csv(main_path, index=False)
         
-        # --- EXPORT 2: HARDWARE STABILITY TABLE ---
         stability_cols = [
             "Model Name", "Avg Latency (100 runs) ms", 
             "Avg Latency (1000 runs) ms", "Avg Latency (Overall) ms"
@@ -210,7 +236,15 @@ def main():
         stability_path = os.path.join(REPORTS_DIR, "latency_stability.csv")
         res_df[stability_cols].to_csv(stability_path, index=False)
         
-        print(f"\nSUCCESS: Main evaluation saved to {main_path}")
+        if raw_latencies_log:
+            max_len = max(len(l) for l in raw_latencies_log.values())
+            padded_log = {k: v + [np.nan] * (max_len - len(v)) for k, v in raw_latencies_log.items()}
+            raw_lat_df = pd.DataFrame(padded_log)
+            raw_lat_path = os.path.join(REPORTS_DIR, "raw_inference_latencies.csv")
+            raw_lat_df.to_csv(raw_lat_path, index=False)
+            print(f"SUCCESS: Raw latency distributions saved to {raw_lat_path}")
+
+        print(f"SUCCESS: Main evaluation saved to {main_path}")
         print(f"SUCCESS: Stability evaluation saved to {stability_path}")
 
 if __name__ == "__main__":

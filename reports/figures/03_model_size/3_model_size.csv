@@ -1,5 +1,9 @@
 Model Name,Short_Name,Storage_MB
-Model A (Base DistilBERT),A (Base Distil),1552.55
-Model B (DAPT-DistilBERT),B (DAPT-Distil),1552.55
-Model C (XLM-R Base),C (XLM-R Base),3203.32
+Model A (Base DistilmBERT),A (Base Distil),519.98
+Model A (Base DistilmBERT),A (Base Distil),519.98
+Model B (DAPT-DistilmBERT),B (DAPT-Distil),519.98
+Model B (DAPT-DistilmBERT),B (DAPT-Distil),519.98
+Model C (XLM-R Base),C (XLM-R Base),1081.82
+Model C (XLM-R Base),C (XLM-R Base),1081.82
+Model D (Optimized DAPT),D (Optimized DAPT),133.21
 Model D (Optimized DAPT),D (Optimized DAPT),133.21

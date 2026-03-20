@@ -1,0 +1,2 @@
+Model_Checkpoint,Learning_Rate,Batch_Size,MLM_Probability,Total_Epochs_Run,Total_Training_Time_s,Avg_Epoch_Time_s,Peak_VRAM_MB
+distilbert-base-multilingual-cased,3e-05,32,0.15,10,1995.13,199.51,5738.16

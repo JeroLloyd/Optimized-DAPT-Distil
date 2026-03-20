@@ -1,17 +1,17 @@
 Emulated_Device,Model,Macro_F1,Latency_ms
-IoT Sensor Node (1 Cores),Model A (Base DistilBERT),0.7929,101.06
-IoT Sensor Node (1 Cores),Model B (DAPT-DistilBERT),0.8059,100.42
-IoT Sensor Node (1 Cores),Model C (XLM-R Base),0.8246,238.89
-IoT Sensor Node (1 Cores),Model D (Optimized DAPT),0.8058,34.01
-Budget Mobile Phone (2 Cores),Model A (Base DistilBERT),0.7929,62.65
-Budget Mobile Phone (2 Cores),Model B (DAPT-DistilBERT),0.8059,64.15
-Budget Mobile Phone (2 Cores),Model C (XLM-R Base),0.8246,137.71
-Budget Mobile Phone (2 Cores),Model D (Optimized DAPT),0.8058,21.06
-Mid-Range Smartphone (3 Cores),Model A (Base DistilBERT),0.7929,51.01
-Mid-Range Smartphone (3 Cores),Model B (DAPT-DistilBERT),0.8059,59.03
-Mid-Range Smartphone (3 Cores),Model C (XLM-R Base),0.8246,171.52
-Mid-Range Smartphone (3 Cores),Model D (Optimized DAPT),0.8058,14.81
-Low-End Laptop (4 Cores),Model A (Base DistilBERT),0.7929,151.63
-Low-End Laptop (4 Cores),Model B (DAPT-DistilBERT),0.8059,162.92
-Low-End Laptop (4 Cores),Model C (XLM-R Base),0.8246,74.18
-Low-End Laptop (4 Cores),Model D (Optimized DAPT),0.8058,26.13
+IoT Sensor Node (1 Cores),Model A (Base DistilmBERT),0.8047,104.63
+IoT Sensor Node (1 Cores),Model B (DAPT-DistilmBERT),0.8091,108.26
+IoT Sensor Node (1 Cores),Model C (XLM-R Base),0.8317,193.49
+IoT Sensor Node (1 Cores),Model D (Optimized DAPT),0.7995,33.43
+Budget Mobile Phone (2 Cores),Model A (Base DistilmBERT),0.8047,58.69
+Budget Mobile Phone (2 Cores),Model B (DAPT-DistilmBERT),0.8091,58.26
+Budget Mobile Phone (2 Cores),Model C (XLM-R Base),0.8317,111.68
+Budget Mobile Phone (2 Cores),Model D (Optimized DAPT),0.7995,20.34
+Mid-Range Smartphone (3 Cores),Model A (Base DistilmBERT),0.8047,49.28
+Mid-Range Smartphone (3 Cores),Model B (DAPT-DistilmBERT),0.8091,53.07
+Mid-Range Smartphone (3 Cores),Model C (XLM-R Base),0.8317,111.83
+Mid-Range Smartphone (3 Cores),Model D (Optimized DAPT),0.7995,16.67
+Low-End Laptop (4 Cores),Model A (Base DistilmBERT),0.8047,41.58
+Low-End Laptop (4 Cores),Model B (DAPT-DistilmBERT),0.8091,39.33
+Low-End Laptop (4 Cores),Model C (XLM-R Base),0.8317,79.76
+Low-End Laptop (4 Cores),Model D (Optimized DAPT),0.7995,13.81

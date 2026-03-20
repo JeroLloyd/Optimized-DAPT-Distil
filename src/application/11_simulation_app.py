@@ -42,8 +42,9 @@ st.markdown("""
 
 # --- MODEL REGISTRY ---
 MODELS = {
-    "Model A": {"name": "Base DistilBERT", "path": os.path.join(MODELS_DIR, "model_a_base"), "type": "pytorch"},
-    "Model B": {"name": "DAPT-DistilBERT", "path": os.path.join(MODELS_DIR, "model_b_dapt"), "type": "pytorch"},
+    "Model A": {"name": "Base DistilmBERT", "path": os.path.join(MODELS_DIR, "model_a_base"), "type": "pytorch"},
+    "Model B": {"name": "DAPT-DistilmBERT", "path": os.path.join(MODELS_DIR, "model_b_dapt"), "type": "pytorch"},
+    "Ablation": {"name": "Authentic-Only DAPT", "path": os.path.join(MODELS_DIR, "ablation_finetuned"), "type": "pytorch"}, # ADDED
     "Model C": {"name": "XLM-RoBERTa", "path": os.path.join(MODELS_DIR, "model_c_xlmr"), "type": "pytorch"},
     "Model D": {"name": "Optimized ONNX", "path": os.path.join(MODELS_DIR, "model_d_onnx"), "tokenizer": os.path.join(MODELS_DIR, "model_d_onnx"), "type": "onnx"}
 }
@@ -107,8 +108,18 @@ def load_thesis_metrics():
     return None
 
 def compute_research_metrics(df):
-    baseline = df.loc[df["Avg Latency (ms)"].idxmax()]
-    df["Speedup_Factor"] = baseline["Avg Latency (ms)"] / df["Avg Latency (ms)"]
+    # Safely handle the updated column name from Stage 8
+    latency_col = "Avg Latency (Overall) ms" if "Avg Latency (Overall) ms" in df.columns else "Avg Latency (ms)"
+    
+    # Exclude the Ablation model from the baseline calculation to avoid skewing Speedup Factors
+    core_models = df[~df['Model Name'].str.contains('Ablation', na=False)]
+    
+    if not core_models.empty:
+        baseline = core_models.loc[core_models[latency_col].idxmax()]
+        df["Speedup_Factor"] = baseline[latency_col] / df[latency_col]
+    else:
+        df["Speedup_Factor"] = 1.0
+
     best_f1 = df["Macro F1 Score"].max()
     df["Performance_Retention"] = (df["Macro F1 Score"] / best_f1) * 100
     
@@ -116,13 +127,14 @@ def compute_research_metrics(df):
     for i, row in df.iterrows():
         dominated = False
         for j, other in df.iterrows():
-            if (other["Avg Latency (ms)"] <= row["Avg Latency (ms)"] and 
+            if (other[latency_col] <= row[latency_col] and 
                 other["Macro F1 Score"] >= row["Macro F1 Score"] and j != i):
                 dominated = True
                 break
         pareto_flags.append(not dominated)
+    
     df["Pareto_Optimal"] = pareto_flags
-    df = df.rename(columns={"Avg Latency (ms)": "Latency_ms", "Macro F1 Score": "Macro_F1", "Model Name": "Model_Name"})
+    df = df.rename(columns={latency_col: "Latency_ms", "Macro F1 Score": "Macro_F1", "Model Name": "Model_Name"})
     return df
 
 # --- CHART FUNCTIONS ---
@@ -175,7 +187,7 @@ def plot_horizontal_metric(df, metric_col, title, format_str, highlight_color):
 def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict, dev):
     if eng_type == "onnx":
         inputs = tk_obj(txt, return_tensors="np", padding=True, truncation=True, max_length=128)
-        if "token_type_ids" in inputs and ("distilbert" in c_dict["name"].lower() or key_n == "Model D"):
+        if "token_type_ids" in inputs and ("distilmbert" in c_dict["name"].lower() or key_n == "Model D"):
             del inputs["token_type_ids"]
         inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
         start = time.perf_counter()
@@ -184,7 +196,7 @@ def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict, dev):
         return logits, dur
     else:
         inputs = tk_obj(txt, return_tensors="pt", padding=True, truncation=True, max_length=128)
-        if "token_type_ids" in inputs and ("distilbert" in c_dict["name"].lower() or "model_a" in key_n.lower() or "model_b" in key_n.lower()):
+        if "token_type_ids" in inputs and ("distilmbert" in c_dict["name"].lower() or "model_a" in key_n.lower() or "model_b" in key_n.lower()):
             del inputs["token_type_ids"]
         inputs = {k: v.to(dev) for k, v in inputs.items()}
         start = time.perf_counter()

@@ -72,7 +72,7 @@ def generate_visualizations():
         best_f1 = df['Macro_F1'].max()
         df['Retention_Pct'] = (df['Macro_F1'] / best_f1) * 100
 
-    df['Short_Name'] = df['Model Name'].apply(lambda x: x.replace("Model ", "").replace("DistilBERT", "Distil"))
+    df['Short_Name'] = df['Model Name'].apply(lambda x: x.replace("Model ", "").replace("DistilmBERT", "Distil"))
     
     set_professional_style()
     

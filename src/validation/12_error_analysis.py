@@ -1,66 +1,41 @@
+# FILE: 12_error_analysis.py
 import os
 import sys
 import pandas as pd
 import numpy as np
 import torch
+import gc
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.metrics import confusion_matrix
+from datasets import Dataset
+from transformers import (
+    AutoTokenizer, 
+    AutoModelForSequenceClassification, 
+    Trainer, 
+    DataCollatorWithPadding
+)
 
-# --- AGGRESSIVE COMPATIBILITY PATCH ---
+# --- AGGRESSIVE COMPATIBILITY PATCHES ---
 import transformers.utils
 import transformers.modeling_utils
 import transformers.models.auto
-import transformers.utils.generic
-
-# 1. Patch is_offline_mode
 if not hasattr(transformers.utils, 'is_offline_mode'):
     transformers.utils.is_offline_mode = lambda: False
-
-# 2. Patch get_parameter_dtype
-if not hasattr(transformers.modeling_utils, 'get_parameter_dtype'):
-    def _mock_get_parameter_dtype(model):
-        try:
-            return next(model.parameters()).dtype
-        except Exception:
-            return torch.float32
-    transformers.modeling_utils.get_parameter_dtype = _mock_get_parameter_dtype
-
-# 3. Patch AutoModelForVision2Seq
-class MockAutoModelForVision2Seq:
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        raise NotImplementedError("This is a mock class for compatibility.")
-setattr(transformers, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
-setattr(transformers.models.auto, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
-
-# 4. Patch ONNX Exporter Requirements
-if not hasattr(transformers.utils.generic, '_CAN_RECORD_REGISTRY'):
-    transformers.utils.generic._CAN_RECORD_REGISTRY = {}
-if not hasattr(transformers.utils.generic, 'OutputRecorder'):
-    class MockOutputRecorder:
-        pass
-    transformers.utils.generic.OutputRecorder = MockOutputRecorder
-
-from sklearn.metrics import confusion_matrix
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
 
-# Resolve root directory whether script is in root or src/
 if os.path.basename(SCRIPT_DIR) == "src":
     BASE_DIR = os.path.dirname(SCRIPT_DIR)
 else:
     BASE_DIR = SCRIPT_DIR
 
 DATA_PATH = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final', 'test.csv')
-
-# CHANGED: Now targeting Model A (Base) and Model B (DAPT)
 MODEL_A_DIR = os.path.join(BASE_DIR, 'models', 'model_a_base')
 MODEL_B_DIR = os.path.join(BASE_DIR, 'models', 'model_b_dapt')
-
 REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
 FIGURES_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
 
@@ -69,117 +44,101 @@ os.makedirs(FIGURES_DIR, exist_ok=True)
 
 LABEL_MAP = {0: "Negative", 1: "Neutral", 2: "Positive"}
 
-def safe_load_tokenizer(model_path, fallback_name):
-    """Bypasses PyPreTokenizerTypeWrapper fast tokenizer corruption."""
-    try:
-        return AutoTokenizer.from_pretrained(model_path)
-    except Exception as e:
-        print(f"  [WARN] Fast tokenizer failed: {e}. Retrying with use_fast=False...")
-        try:
-            return AutoTokenizer.from_pretrained(model_path, use_fast=False)
-        except Exception as e2:
-            print(f"  [WARN] Local tokenizer failed completely. Falling back to base {fallback_name}...")
-            return AutoTokenizer.from_pretrained(fallback_name)
+def clear_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+def normalize_columns(df):
+    """Syncs data cleaning with the training pipeline to maximize score."""
+    if 'text' not in df.columns and 'review' in df.columns:
+        df = df.rename(columns={'review': 'text'})
+    if 'label' not in df.columns and 'sentiment' in df.columns:
+        df = df.rename(columns={'sentiment': 'label'})
+    df = df.dropna(subset=['text', 'label'])
+    df['label'] = df['label'].astype(int)
+    return df
+
+def get_predictions_batched(model_path, texts, tokenizer_name):
+    """Executes high-speed batch inference to reduce analysis time."""
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    ds = Dataset.from_pandas(pd.DataFrame({"text": texts}))
+    tokenized_ds = ds.map(lambda x: tokenizer(x["text"], truncation=True, max_length=128), batched=True)
+    
+    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    model.eval()
+
+    trainer = Trainer(
+        model=model, 
+        tokenizer=tokenizer,
+        data_collator=DataCollatorWithPadding(tokenizer=tokenizer)
+    )
+    
+    print(f"-> Generating inferences for {os.path.basename(model_path)}...")
+    output = trainer.predict(tokenized_ds)
+    y_pred = np.argmax(output.predictions, axis=-1)
+    
+    del model, trainer
+    clear_memory()
+    return y_pred
 
 def main():
     print(f"Project Root Detected: {BASE_DIR}")
-    print("--- GENERATING REAL DATA FOR CHAPTER 4.4 ---")
+    print("--- GENERATING QUALITATIVE ERROR DATA (A vs B) ---")
 
     if not os.path.exists(DATA_PATH):
         print(f"[ERROR] Test data not found: {DATA_PATH}")
         return
     
-    df = pd.read_csv(DATA_PATH)
-    if 'review' in df.columns: 
-        df = df.rename(columns={'review': 'text'})
-        
+    # FIXED: Load and normalize test data
+    df_raw = pd.read_csv(DATA_PATH)
+    df = normalize_columns(df_raw)
+    
     texts = df['text'].tolist()
     true_labels = df['label'].tolist()
 
-    print("Loading Model A (Base DistilBERT)...")
-    tokenizer_a = safe_load_tokenizer(MODEL_A_DIR, "distilbert-base-multilingual-cased")
-    model_a = AutoModelForSequenceClassification.from_pretrained(MODEL_A_DIR)
-    model_a.eval()
-
-    print("Loading Model B (DAPT-DistilBERT)...")
-    tokenizer_b = safe_load_tokenizer(MODEL_B_DIR, "distilbert-base-multilingual-cased")
-    model_b = AutoModelForSequenceClassification.from_pretrained(MODEL_B_DIR)
-    model_b.eval()
-
-    def get_predictions(tokenizer, model, is_onnx=False):
-        preds = []
-        print(f"Predicting {len(texts)} sequences...")
-        for text in texts:
-            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
-            # Remove token_type_ids for distilbert compatibility if present
-            if "token_type_ids" in inputs:
-                inputs.pop("token_type_ids")
-
-            with torch.no_grad():
-                outputs = model(**inputs)
-                logits = outputs.logits
-                    
-            pred = np.argmax(logits.cpu().numpy(), axis=1)[0]
-            preds.append(pred)
-        return preds
-
-    print("\nRunning inferences for Base DistilBERT (Model A)...")
-    preds_a = get_predictions(tokenizer_a, model_a, is_onnx=False)
-    
-    print("Running inferences for DAPT-DistilBERT (Model B)...")
-    preds_b = get_predictions(tokenizer_b, model_b, is_onnx=False)
+    # PHASE 1: Run Synchronized Batch Inferences
+    preds_a = get_predictions_batched(MODEL_A_DIR, texts, "distilbert-base-multilingual-cased")
+    preds_b = get_predictions_batched(MODEL_B_DIR, texts, "distilbert-base-multilingual-cased")
 
     df['Pred_Base'] = preds_a
     df['Pred_DAPT'] = preds_b
 
-    print("\n--- CONFUSION MATRIX (Model B - DAPT) ---")
+    # PHASE 2: Export Confusion Matrix for Model B
+    print("\n--- CONFUSION MATRIX (Model B - DAPT-DistilmBERT) ---")
     cm = confusion_matrix(true_labels, preds_b, labels=[0, 1, 2])
     
     cm_df = pd.DataFrame(cm, 
                          index=["True Negative", "True Neutral", "True Positive"], 
                          columns=["Pred Negative", "Pred Neutral", "Pred Positive"])
-    
-    cm_csv_path = os.path.join(REPORTS_DIR, 'real_confusion_matrix.csv')
-    cm_df.to_csv(cm_csv_path)
-    print(cm_df)
-    print(f"Saved Confusion Matrix CSV to: {cm_csv_path}")
+    cm_df.to_csv(os.path.join(REPORTS_DIR, 'real_confusion_matrix.csv'))
 
-    # --- PLOT CONFUSION MATRIX ---
+    # FIG 7: Generate visual report
     plt.figure(figsize=(8, 6))
-    sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
-    plt.rcParams.update({'font.family': 'sans-serif'})
-
+    sns.set_theme(style="white")
     ax = sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=["Negative", "Neutral", "Positive"],
                 yticklabels=["Negative", "Neutral", "Positive"],
                 annot_kws={"size": 14, "weight": "bold"},
                 linewidths=1, linecolor='black')
     
-    plt.title("Confusion Matrix: DAPT-DistilBERT (Model B)", fontsize=16, fontweight='bold', pad=20)
-    plt.ylabel('True Sentiment', fontsize=13, fontweight='bold')
-    plt.xlabel('Predicted Sentiment', fontsize=13, fontweight='bold')
+    plt.title("Confusion Matrix: DAPT-DistilmBERT (Model B)", fontsize=16, fontweight='bold', pad=20)
+    plt.ylabel('True Sentiment', fontweight='bold')
+    plt.xlabel('Predicted Sentiment', fontweight='bold')
     plt.tight_layout()
-
-    cm_fig_path = os.path.join(FIGURES_DIR, '7_confusion_matrix.png')
-    plt.savefig(cm_fig_path, dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(FIGURES_DIR, '7_confusion_matrix.png'), dpi=300)
     plt.close()
-    print(f"Saved Confusion Matrix Figure to: {cm_fig_path}")
 
-    print("\n--- EXTRACTING QUALITATIVE ERRORS ---")
+    # PHASE 3: Isolate qualitative success cases
+    # We want cases where the generic model (A) failed, but domain-adapted (B) succeeded
+    success_cases = df[(df['label'] != df['Pred_Base']) & (df['label'] == df['Pred_DAPT'])].copy()
+    success_cases['True_Sentiment'] = success_cases['label'].map(LABEL_MAP)
+    success_cases['Base_Model_Error'] = success_cases['Pred_Base'].map(LABEL_MAP)
     
-    # CHANGED: Isolate where Base DistilBERT failed but DAPT-DistilBERT succeeded
-    error_df = df[(df['label'] != df['Pred_Base']) & (df['label'] == df['Pred_DAPT'])].copy()
+    export_df = success_cases[['text', 'True_Sentiment', 'Base_Model_Error']]
+    export_df.to_csv(os.path.join(REPORTS_DIR, 'qualitative_errors_MODEL_A_vs_B.csv'), index=False)
     
-    error_df['True_Sentiment'] = error_df['label'].map(LABEL_MAP)
-    error_df['Base_Model_Guessed'] = error_df['Pred_Base'].map(LABEL_MAP)
-    
-    export_df = error_df[['text', 'True_Sentiment', 'Base_Model_Guessed']]
-    
-    errors_path = os.path.join(REPORTS_DIR, 'qualitative_errors_for_thesis.csv')
-    export_df.to_csv(errors_path, index=False)
-    print(f"Found {len(export_df)} specific sentences where Base DistilBERT failed but DAPT succeeded.")
-    print(f"Saved qualitative errors to: {errors_path}")
-    print("\nDone! Open 'qualitative_errors_for_thesis.csv' to pick real examples for Chapter 4.4.")
+    print(f"SUCCESS: Found {len(export_df)} cases where DAPT improved classification.")
 
 if __name__ == "__main__":
     main()

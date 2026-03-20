@@ -1,6 +1,6 @@
 Evaluation_Type,Macro_F1_Score
-Seed 42,0.8059
-Seed 123,0.8171
-Seed 777,0.8075
-Mean,0.8102
-Standard Deviation,0.005
+Seed 42,0.8091
+Seed 123,0.799
+Seed 777,0.8105
+Mean,0.8062
+Standard Deviation,0.0051

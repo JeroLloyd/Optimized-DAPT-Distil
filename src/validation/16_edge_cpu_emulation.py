@@ -1,6 +1,8 @@
+# FILE: 16_edge_cpu_emulation.py
 import os
 import time
 import torch
+import gc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -31,14 +33,22 @@ BASE_DIR = os.path.dirname(SRC_DIR)
 
 DATA_PATH = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final', 'test.csv')
 FINAL_METRICS_PATH = os.path.join(BASE_DIR, 'reports', 'metrics', 'final_metrics.csv')
+
+# SYNCED: Model directories
 MODEL_A_DIR = os.path.join(BASE_DIR, 'models', 'model_a_base')
 MODEL_B_DIR = os.path.join(BASE_DIR, 'models', 'model_b_dapt')
 MODEL_C_DIR = os.path.join(BASE_DIR, 'models', 'model_c_xlmr')
 MODEL_D_DIR = os.path.join(BASE_DIR, 'models', 'model_d_onnx')
-FIGURES_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
 
+FIGURES_DIR = os.path.join(BASE_DIR, 'reports', 'figures')
 os.makedirs(FIGURES_DIR, exist_ok=True)
+
 MAX_LATENCY_SAMPLES = 200
+
+def clear_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def safe_load_tokenizer(model_path, fallback_name):
     try:
@@ -51,11 +61,12 @@ def get_official_f1(model_name):
     try:
         if os.path.exists(FINAL_METRICS_PATH):
             df = pd.read_csv(FINAL_METRICS_PATH)
+            # SYNCED: Matches nomenclature from Script 06 logs
             row = df[df['Model Name'] == model_name]
             if not row.empty:
                 return float(row.iloc[0]['Macro F1 Score'])
     except Exception as e:
-        print(f"  [WARN] Could not sync official metrics: {e}")
+        print(f"  [WARN] Could not sync official metrics for {model_name}: {e}")
     return 0.0
 
 def measure_latency(model_path, texts, cores, fallback_tokenizer, is_onnx=False):
@@ -63,42 +74,46 @@ def measure_latency(model_path, texts, cores, fallback_tokenizer, is_onnx=False)
     tokenizer = safe_load_tokenizer(model_path, fallback_tokenizer)
     latencies = []
     
-    # Randomly sample to reduce execution time while maintaining statistical validity
     np.random.seed(42)
     sample_indices = np.random.choice(len(texts), min(MAX_LATENCY_SAMPLES, len(texts)), replace=False)
     sampled_texts = [texts[i] for i in sample_indices]
     
     if is_onnx:
+        # EMULATION: Lock ONNX to specific thread count
         options = ort.SessionOptions()
         options.intra_op_num_threads = cores
+        options.inter_op_num_threads = 1
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
         model = ORTModelForSequenceClassification.from_pretrained(
             model_path, provider="CPUExecutionProvider", session_options=options
         )
         
         warmup = tokenizer(sampled_texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
-        if "distilbert" in fallback_tokenizer: warmup.pop("token_type_ids", None)
+        if "distilbert" in fallback_tokenizer.lower(): warmup.pop("token_type_ids", None)
         _ = model(**warmup)
 
         for text in sampled_texts:
             inputs = tokenizer(text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
-            if "distilbert" in fallback_tokenizer: inputs.pop("token_type_ids", None)
+            if "distilbert" in fallback_tokenizer.lower(): inputs.pop("token_type_ids", None)
             
             start = time.perf_counter()
             _ = model(**inputs)
             latencies.append((time.perf_counter() - start) * 1000)
     else:
+        # EMULATION: Lock PyTorch to specific thread count
         torch.set_num_threads(cores)
         model = AutoModelForSequenceClassification.from_pretrained(model_path)
         model.to("cpu")
         model.eval()
         
         warmup = tokenizer(sampled_texts[0], return_tensors="pt", truncation=True, padding='max_length', max_length=128)
-        if "distilbert" in fallback_tokenizer: warmup.pop("token_type_ids", None)
+        if "distilbert" in fallback_tokenizer.lower(): warmup.pop("token_type_ids", None)
         with torch.no_grad(): _ = model(**warmup)
 
         for text in sampled_texts:
             inputs = tokenizer(text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
-            if "distilbert" in fallback_tokenizer: inputs.pop("token_type_ids", None)
+            if "distilbert" in fallback_tokenizer.lower(): inputs.pop("token_type_ids", None)
             
             start = time.perf_counter()
             with torch.no_grad(): _ = model(**inputs)
@@ -113,6 +128,7 @@ def generate_visualizations(df):
     sns.set_theme(style="whitegrid", rc={"axes.facecolor": "#f8f9fa"})
     palette = ["#7f8c8d", "#3498db", "#e74c3c", "#2ecc71"]
     
+    # FIG 8a: Latency Bar Chart
     plt.figure(figsize=(14, 7))
     sns.barplot(data=df, x='Emulated_Device', y='Latency_ms', hue='Model', palette=palette)
     plt.title("Inference Latency Across Edge Devices", fontsize=16, fontweight='bold', pad=15)
@@ -123,6 +139,7 @@ def generate_visualizations(df):
     plt.savefig(os.path.join(EDGE_DIR, "8a_edge_latency.png"), dpi=300)
     plt.close()
 
+    # FIG 8b: Efficiency Relplot (Pareto)
     g = sns.relplot(
         data=df, x='Latency_ms', y='Macro_F1', hue='Model', col='Emulated_Device',
         col_wrap=2, kind='scatter', s=300, palette=palette, height=4.5, aspect=1.3,
@@ -143,9 +160,9 @@ def main():
         print(f"[ERROR] Test data not found: {DATA_PATH}")
         return
         
-    df = pd.read_csv(DATA_PATH)
-    text_col = 'review' if 'review' in df.columns else 'text'
-    texts = df[text_col].tolist()
+    df_test = pd.read_csv(DATA_PATH)
+    text_col = 'review' if 'review' in df_test.columns else 'text'
+    texts = df_test[text_col].tolist()
     
     hardware_profiles = [
         {"name": "IoT Sensor Node", "cores": 1},
@@ -154,9 +171,10 @@ def main():
         {"name": "Low-End Laptop", "cores": 4}
     ]
     
+    # SYNCED: Nomenclature with Stage 2 logs
     models_to_test = [
-        ("Model A (Base DistilBERT)", MODEL_A_DIR, "distilbert-base-multilingual-cased", False),
-        ("Model B (DAPT-DistilBERT)", MODEL_B_DIR, "distilbert-base-multilingual-cased", False),
+        ("Model A (Base DistilmBERT)", MODEL_A_DIR, "distilbert-base-multilingual-cased", False),
+        ("Model B (DAPT-DistilmBERT)", MODEL_B_DIR, "distilbert-base-multilingual-cased", False),
         ("Model C (XLM-R Base)", MODEL_C_DIR, "xlm-roberta-base", False),
         ("Model D (Optimized DAPT)", MODEL_D_DIR, "distilbert-base-multilingual-cased", True)
     ]
@@ -164,12 +182,11 @@ def main():
     results = []
     dynamic_f1_cache = {}
 
-    print("Phase 1: Syncing official F1 scores...")
+    print("Phase 1: Syncing official F1 scores from Stage 8...")
     for name, path, tokenizer_name, is_onnx in models_to_test:
-        if os.path.exists(path):
-            f1 = get_official_f1(name)
-            dynamic_f1_cache[name] = f1
-            print(f"  Synced {name}: {f1:.4f}")
+        f1 = get_official_f1(name)
+        dynamic_f1_cache[name] = f1
+        print(f"  Synced {name}: {f1:.4f}")
 
     print("\nPhase 2: Profiling hardware latency constraints...")
     for profile in hardware_profiles:
@@ -188,6 +205,7 @@ def main():
                     "Macro_F1": dynamic_f1_cache[name],
                     "Latency_ms": lat
                 })
+                clear_memory()
 
     results_df = pd.DataFrame(results)
     results_df["Latency_ms"] = results_df["Latency_ms"].round(2)
@@ -200,7 +218,7 @@ def main():
     csv_df["Emulated_Device"] = csv_df["Emulated_Device"].str.replace("\n", " ")
     csv_df.to_csv(csv_path, index=False)
     
-    print("\nGenerating visual reports...")
+    print("\nGenerating visual reports for Chapter 4...")
     generate_visualizations(results_df)
     
     print(f"\n[SUCCESS] Emulation data saved to: {csv_path}")

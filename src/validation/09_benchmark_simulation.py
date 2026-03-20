@@ -24,10 +24,10 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # Comparison List
 MODELS_TO_BENCHMARK = [
-    ("Model A", os.path.join(MODELS_DIR, "model_a_base"), "pytorch"),
-    ("Model B", os.path.join(MODELS_DIR, "model_b_dapt"), "pytorch"),
-    ("Model C", os.path.join(MODELS_DIR, "model_c_xlmr"), "pytorch"),
-    ("Model D", os.path.join(MODELS_DIR, "model_d_onnx"), "onnx")
+    ("Model A (Base DistilmBERT)", os.path.join(MODELS_DIR, "model_a_base"), "pytorch"),
+    ("Model B (DAPT-DistilmBERT)", os.path.join(MODELS_DIR, "model_b_dapt"), "pytorch"),
+    ("Model C (XLM-R Base)", os.path.join(MODELS_DIR, "model_c_xlmr"), "pytorch"),
+    ("Model D (Optimized DAPT)", os.path.join(MODELS_DIR, "model_d_onnx"), "onnx")
 ]
 
 def get_dir_size_mb(path):
@@ -54,6 +54,10 @@ def run_stress_test(name, path, runtime, texts, device="cpu"):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # --- ALIGNMENT: Enforce single-threading on CPU for fair baseline comparison ---
+    if device == "cpu":
+        torch.set_num_threads(1)
+
     start_load = time.time()
     tokenizer = load_tokenizer_safe(path)
     
@@ -62,25 +66,34 @@ def run_stress_test(name, path, runtime, texts, device="cpu"):
         model.to(device)
         model.eval()
     else:
-        # Check available ONNX providers
         available_providers = ort.get_available_providers()
         print(f"  [INFO] Available ONNX Providers: {available_providers}")
         
         provider = "CUDAExecutionProvider" if device == "cuda" else "CPUExecutionProvider"
         
-        # Fallback if CUDA is requested but not available in ONNX Runtime
         if provider == "CUDAExecutionProvider" and provider not in available_providers:
             print(f"  [WARN] {provider} not found in ONNX Runtime. Falling back to CPUExecutionProvider.")
             provider = "CPUExecutionProvider"
             
-        model = ORTModelForSequenceClassification.from_pretrained(path, provider=provider)
+        # --- ALIGNMENT: Apply strict ONNX graph optimizations ---
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        if device == "cpu":
+            sess_options.intra_op_num_threads = 1
+            sess_options.inter_op_num_threads = 1
+            
+        model = ORTModelForSequenceClassification.from_pretrained(
+            path, 
+            provider=provider,
+            session_options=sess_options
+        )
         
     load_time = time.time() - start_load
     print(f"  Load Time: {load_time:.4f}s")
 
     warmup_text = texts[0]
     warmup_input = tokenizer(warmup_text, return_tensors="pt", truncation=True, padding='max_length', max_length=128)
-    if "distilbert" in name.lower(): 
+    if "distilmbert" in name.lower(): 
         warmup_input.pop("token_type_ids", None)
     
     if runtime == "pytorch":
