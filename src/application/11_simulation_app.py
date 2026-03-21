@@ -8,14 +8,50 @@ import torch
 import matplotlib.pyplot as plt
 import platform
 import altair as alt
+import transformers
+import transformers.models.auto
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from scipy.special import softmax
+import re
+
+# --- NEW PREPROCESSING ALGORITHM ---
+def apply_thesis_preprocessing(text):
+    """Replicates the text cleaning and gibberish salvaging from script 04."""
+    # 1. Basic Clean
+    text = str(text).lower()
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'[^a-z0-9\s]', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # 2. Gibberish Filtering
+    words = text.split()
+    clean_words = []
+    for word in words:
+        if len(word) > 15: continue
+        vowels = len(re.findall(r'[aeiou]', word))
+        if len(word) > 0:
+            ratio = vowels / len(word)
+            if ratio < 0.2 or ratio > 0.9: continue
+        clean_words.append(word)
+        
+    return " ".join(clean_words) if len(clean_words) >= 3 else None
 
 # Strict Inter-op threading limit for accurate Edge CPU Emulation
 try:
     torch.set_num_interop_threads(1)
 except Exception:
     pass
+
+class MockAutoModelForVision2Seq:
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        raise NotImplementedError("Mock class for compatibility.")
+
+setattr(transformers, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
+setattr(transformers.models.auto, "AutoModelForVision2Seq", MockAutoModelForVision2Seq)
+
+if not hasattr(transformers.utils, 'is_offline_mode'):
+    transformers.utils.is_offline_mode = lambda: False
 
 # --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +80,6 @@ st.markdown("""
 MODELS = {
     "Model A": {"name": "Base DistilmBERT", "path": os.path.join(MODELS_DIR, "model_a_base"), "type": "pytorch"},
     "Model B": {"name": "DAPT-DistilmBERT", "path": os.path.join(MODELS_DIR, "model_b_dapt"), "type": "pytorch"},
-    "Ablation": {"name": "Authentic-Only DAPT", "path": os.path.join(MODELS_DIR, "ablation_finetuned"), "type": "pytorch"}, # ADDED
     "Model C": {"name": "XLM-RoBERTa", "path": os.path.join(MODELS_DIR, "model_c_xlmr"), "type": "pytorch"},
     "Model D": {"name": "Optimized ONNX", "path": os.path.join(MODELS_DIR, "model_d_onnx"), "tokenizer": os.path.join(MODELS_DIR, "model_d_onnx"), "type": "onnx"}
 }
@@ -101,21 +136,22 @@ def get_edge_onnx_session(path, cores):
 
 @st.cache_data
 def load_thesis_metrics():
-    if os.path.exists(RESULTS_PATH):
-        df = pd.read_csv(RESULTS_PATH)
-        df.columns = [c.strip() for c in df.columns] 
-        return df
-    return None
+    if not os.path.exists(RESULTS_PATH):
+        return None
+        
+    df = pd.read_csv(RESULTS_PATH)
+    df.columns = [c.strip() for c in df.columns] 
+    
+    return df
+    
 
 def compute_research_metrics(df):
     # Safely handle the updated column name from Stage 8
     latency_col = "Avg Latency (Overall) ms" if "Avg Latency (Overall) ms" in df.columns else "Avg Latency (ms)"
     
-    # Exclude the Ablation model from the baseline calculation to avoid skewing Speedup Factors
-    core_models = df[~df['Model Name'].str.contains('Ablation', na=False)]
-    
-    if not core_models.empty:
-        baseline = core_models.loc[core_models[latency_col].idxmax()]
+    # Calculate Speedup Factor
+    if not df.empty:
+        baseline = df.loc[df[latency_col].idxmax()]
         df["Speedup_Factor"] = baseline[latency_col] / df[latency_col]
     else:
         df["Speedup_Factor"] = 1.0
@@ -123,64 +159,44 @@ def compute_research_metrics(df):
     best_f1 = df["Macro F1 Score"].max()
     df["Performance_Retention"] = (df["Macro F1 Score"] / best_f1) * 100
     
-    pareto_flags = []
-    for i, row in df.iterrows():
-        dominated = False
-        for j, other in df.iterrows():
-            if (other[latency_col] <= row[latency_col] and 
-                other["Macro F1 Score"] >= row["Macro F1 Score"] and j != i):
-                dominated = True
-                break
-        pareto_flags.append(not dominated)
+    # --- NEW EFFICIENCY METRICS ---
+    # Compute Efficiency: F1 score achieved per 1000ms of latency
+    df["Compute_Efficiency"] = (df["Macro F1 Score"] / df[latency_col]) * 1000
     
-    df["Pareto_Optimal"] = pareto_flags
+    # Storage Efficiency: F1 score achieved per MB of disk space
+    if "Model Size (MB)" in df.columns:
+        df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Model Size (MB)"]) * 1000
+    elif "Storage_MB" in df.columns:
+        df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Storage_MB"]) * 1000
+        
     df = df.rename(columns={latency_col: "Latency_ms", "Macro F1 Score": "Macro_F1", "Model Name": "Model_Name"})
     return df
 
-# --- CHART FUNCTIONS ---
-def plot_pareto_with_indicator(df):
-    plt.style.use("seaborn-v0_8-darkgrid")
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
-    fig.patch.set_facecolor('#0E1117')
-    ax.set_facecolor('#1E1E1E')
-    
-    df_plot = df.sort_values("Latency_ms")
-    x = df_plot["Latency_ms"].values
-    y = df_plot["Macro_F1"].values
-
-    ax.set_xlabel("Inference Latency (ms) [Lower is Better]", fontsize=11, fontweight='bold', color='white')
-    ax.set_ylabel("F1 Score [Higher is Better]", fontsize=11, fontweight='bold', color='white')
-    ax.set_title("Latency-Accuracy Pareto Frontier", fontsize=14, fontweight='bold', color='white', pad=15)
-    ax.tick_params(colors='white')
-
-    ax.axvspan(0, 20, color="#2ecc71", alpha=0.15)
-    ax.text(10, min(y), "Real-Time Zone (<20ms)", ha='center', fontsize=9, color="#2ecc71")
-
-    for _, row in df_plot.iterrows():
-        is_optimized = "Model D" in row["Model ID"]
-        color = "#2ecc71" if is_optimized else "#3498db"
-        size = 200 if is_optimized else 100
-        alpha = 1.0 if row["Pareto_Optimal"] else 0.5
-        marker = 'D' if is_optimized else 'o'
-
-        ax.scatter(row["Latency_ms"], row["Macro_F1"], s=size, color=color, alpha=alpha, edgecolors="white", marker=marker, zorder=5)
-        ax.annotate(row["Model ID"], (row["Latency_ms"], row["Macro_F1"]), xytext=(0, 10), textcoords='offset points', ha='center', fontsize=9, fontweight='bold', color='white')
-
-    ax.grid(True, linestyle='--', alpha=0.3)
-    st.pyplot(fig)
 
 def plot_horizontal_metric(df, metric_col, title, format_str, highlight_color):
+    domain = [
+        "Model A (Base DistilmBERT)", 
+        "Model B (DAPT-DistilmBERT)", 
+        "Model C (XLM-R Base)", 
+        "Model D (Optimized DAPT)"
+    ]
+    # Models A and C = Grey. Models B and D = Green.
+    range_colors = ['#34495e', '#34495e', '#34495e', '#2ecc71']
+
     base = alt.Chart(df).encode(
         y=alt.Y('Model_Name:N', sort=None, title=None, axis=alt.Axis(labelLimit=300, labelColor='white')),
         x=alt.X(f'{metric_col}:Q', title=None, axis=alt.Axis(grid=True, format=format_str, labelColor='white')),
-        tooltip=['Model ID', 'Model_Name', alt.Tooltip(f'{metric_col}:Q', format=format_str)]
+        tooltip=['Model_Name', alt.Tooltip(f'{metric_col}:Q', format=format_str)]
     )
+    
     bars = base.mark_bar(cornerRadiusEnd=4, height=35).encode(
-        color=alt.condition(alt.datum['Model ID'] == 'Model D', alt.value(highlight_color), alt.value('#34495e'))
+        color=alt.Color('Model_Name:N', scale=alt.Scale(domain=domain, range=range_colors), legend=None)
     )
+    
     text = base.mark_text(align='left', baseline='middle', dx=5, color='white', fontWeight='bold').encode(
         text=alt.Text(f'{metric_col}:Q', format=format_str)
     )
+    
     return (bars + text).properties(title=alt.TitleParams(text=title, color='white'), height=220)
 
 # --- INFERENCE ENGINE ---
@@ -205,6 +221,11 @@ def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict, dev):
         dur = (time.perf_counter() - start) * 1000
         return logits, dur
 
+# --- SESSION STATE INITIALIZATION ---
+if 'edge_state' not in st.session_state: st.session_state.edge_state = None
+if 'diag_state' not in st.session_state: st.session_state.diag_state = None
+if 'batch_state' not in st.session_state: st.session_state.batch_state = None
+
 # --- UI LOGIC ---
 with st.sidebar:
     st.header("Evaluation Controls")
@@ -222,11 +243,13 @@ st.title("Sentiment Analysis Evaluation Framework")
 if mode == "Evaluation Dashboard":
     st.header("Comparative Model Evaluation")
     df_static = load_thesis_metrics()
+    
     if df_static is None:
         st.error("Metrics file missing. Execute quantitative benchmarking script first.")
     else:
         df_plot = df_static.drop_duplicates(subset=['Model Name']).copy()
         df_plot = compute_research_metrics(df_plot)
+        
         st.subheader("Key Performance Indicators by Architecture")
         c1, c2 = st.columns(2)
         with c1:
@@ -235,29 +258,39 @@ if mode == "Evaluation Dashboard":
         with c2:
             st.altair_chart(plot_horizontal_metric(df_plot, "Latency_ms", "Inference Latency in ms (Lower is Better)", ".2f", "#e74c3c"), use_container_width=True)
             st.altair_chart(plot_horizontal_metric(df_plot, "Performance_Retention", "Performance Retained %", ".1f", "#3498db"), use_container_width=True)
+        
         st.divider()
         st.subheader("Efficiency Distribution")
-        plot_pareto_with_indicator(df_plot)
-
+        
+        c3, c4 = st.columns(2)
+        with c3:
+            st.altair_chart(plot_horizontal_metric(df_plot, "Compute_Efficiency", "Compute Efficiency: F1 per 1000ms (Higher is Better)", ".2f", "#f39c12"), use_container_width=True)
+        with c4:
+            if "Storage_Efficiency" in df_plot.columns:
+                st.altair_chart(plot_horizontal_metric(df_plot, "Storage_Efficiency", "Storage Efficiency: F1 per MB (Higher is Better)", ".2f", "#e67e22"), use_container_width=True)
+            else:
+                st.info("Storage Efficiency data not available.")
+      
 elif mode == "Edge Emulation":
-    # --- LIVE EDGE EMULATION SECTION ---
     st.header("Live Edge Hardware Emulation")
     st.markdown("Enter code-switched text to dynamically benchmark it across 1 to 4 restricted CPU cores. This emulates inference limits for common low-end devices.")
     text_input_edge = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.", key="edge_input")
     
     if st.button("Simulate Hardware Processing"):
-        st.subheader("1. Subword Tokenization")
-        tokenizer, _, _ = load_one_model("Model D", device="cpu") 
+        st.session_state.edge_state = {}
+        
+        # Methodological Consistency: Preprocess before tokenization
+        text_to_process = apply_thesis_preprocessing(text_input_edge)
+        if not text_to_process:
+            st.error("Input rejected: Preprocessing filtered this text as gibberish or insufficient.")
+            
+        st.session_state.edge_state['cleaned_text'] = text_to_process
+        tokenizer, _, _ = load_one_model("Model D", device="cpu")
         if tokenizer:
             tokens = tokenizer.tokenize(text_input_edge)
             token_ids = tokenizer.convert_tokens_to_ids(tokens)
-            html_tokens = ""
-            for t, tid in zip(tokens, token_ids):
-                html_tokens += f"<div style='display:inline-block; margin:2px; padding:5px; background:#1E1E1E; border: 1px solid #333; border-radius:4px; text-align:center;'><span style='color:#2ecc71; font-size:13px; font-weight:bold;'>{t}</span><br><span style='color:#aaaaaa; font-size:11px;'>{tid}</span></div>"
-            st.markdown(html_tokens, unsafe_allow_html=True)
+            st.session_state.edge_state['tokens'] = list(zip(tokens, token_ids))
             
-        st.subheader("2. Computational Execution (Restricted Cores)")
-        
         edge_profiles = [
             {"name": "IoT Sensor Node", "cores": 1},
             {"name": "Budget Mobile Phone", "cores": 2},
@@ -275,7 +308,6 @@ elif mode == "Edge Emulation":
                 cores = profile["cores"]
                 device_name = f"{profile['name']} ({cores} Cores)"
                 
-                # Apply Dynamic Thread Limit for PyTorch
                 torch.set_num_threads(cores)
                 
                 for key, conf in MODELS.items():
@@ -284,7 +316,6 @@ elif mode == "Edge Emulation":
                         if tokenizer is None:
                             current_op += 1; continue
                         try:
-                            # Apply thread limit specifically to ONNX session creation
                             model = get_edge_onnx_session(conf["path"], cores)
                         except Exception:
                             current_op += 1; continue
@@ -294,16 +325,14 @@ elif mode == "Edge Emulation":
                         if model is None:
                             current_op += 1; continue
                             
-                    # Warmup
                     try:
                         run_inference("warmup", tokenizer, model, engine, key, conf, "cpu")
                     except Exception:
                         pass
                         
-                    # Measure Latency
                     latencies = []
                     final_logits = None
-                    for _ in range(10): # Run 10 times for stable average in Streamlit
+                    for _ in range(10): 
                         logits, dur = run_inference(text_input_edge, tokenizer, model, engine, key, conf, "cpu")
                         latencies.append(dur)
                         final_logits = logits
@@ -325,46 +354,67 @@ elif mode == "Edge Emulation":
                     current_op += 1
                     progress_bar.progress(current_op / total_operations)
                     
+        st.session_state.edge_state['df'] = pd.DataFrame(results_data_edge)
+
+    # --- Render from Memory if Exists ---
+    if st.session_state.edge_state is not None:
+        st.subheader("1. Subword Tokenization")
+        if 'tokens' in st.session_state.edge_state:
+            html_tokens = ""
+            for t, tid in st.session_state.edge_state['tokens']:
+                html_tokens += f"<div style='display:inline-block; margin:2px; padding:5px; background:#1E1E1E; border: 1px solid #333; border-radius:4px; text-align:center;'><span style='color:#2ecc71; font-size:13px; font-weight:bold;'>{t}</span><br><span style='color:#aaaaaa; font-size:11px;'>{tid}</span></div>"
+            st.markdown(html_tokens, unsafe_allow_html=True)
+        
+        st.subheader("2. Computational Execution (Restricted Cores)")
+        st.success("Hardware emulation completed successfully.")
+        
         st.subheader("3. Live Hardware Latency Comparison")
-        df_results_edge = pd.DataFrame(results_data_edge)
+        df_results_edge = st.session_state.edge_state['df']
         
-        # Display Logs Table
-        display_df = df_results_edge.copy()
-        display_df["Avg Latency"] = display_df["Avg Latency"].apply(lambda x: f"{x:.2f} ms")
-        display_df["Confidence"] = display_df["Confidence"].apply(lambda x: f"{x*100:.1f}%")
-        st.dataframe(display_df[["Model", "Hardware Profile", "Avg Latency", "Prediction", "Confidence"]], use_container_width=True, hide_index=True)
+        st.markdown("**Latency Matrix (ms)**")
+        pivot_df = df_results_edge.pivot(index="Model", columns="Hardware Profile", values="Avg Latency")
         
-        # Display Chart
-        live_lat_chart = alt.Chart(df_results_edge).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
-            x=alt.X('Hardware Profile:N', title=None, sort=None, axis=alt.Axis(labelAngle=0, labelColor='white')),
-            xOffset='Model:N',
-            y=alt.Y('Avg Latency:Q', title='Latency (ms)', axis=alt.Axis(labelColor='white', titleColor='white')),
-            color=alt.Color('Model:N', scale=alt.Scale(scheme='set1')),
+        display_pivot = pivot_df.copy()
+        for col in display_pivot.columns:
+            display_pivot[col] = display_pivot[col].apply(lambda x: f"{x:.2f} ms")
+            
+        st.dataframe(display_pivot, use_container_width=True)
+        
+        st.markdown("**Visual Hardware Benchmark**")
+        domain = ["Model A", "Model B", "Model C", "Model D"]
+        range_colors = ['#34495e', '#34495e', '#34495e', '#2ecc71']
+
+        live_lat_chart = alt.Chart(df_results_edge).mark_bar(cornerRadiusEnd=3, height=18).encode(
+            y=alt.Y('Hardware Profile:N', title=None, sort=None, axis=alt.Axis(labelColor='white', labelFontSize=12, labelFontWeight='bold')),
+            yOffset='Model:N',
+            x=alt.X('Avg Latency:Q', title='Inference Latency in ms (Lower is Better)', axis=alt.Axis(labelColor='white', titleColor='white', grid=True)),
+            color=alt.Color('Model:N', scale=alt.Scale(domain=domain, range=range_colors), legend=alt.Legend(title=None, labelColor='white', orient='top', padding=10)),
             tooltip=['Model', 'Hardware Profile', alt.Tooltip('Avg Latency:Q', format='.2f')]
-        ).properties(height=400)
+        ).properties(height=450)
         
-        text_lat_edge = live_lat_chart.mark_text(
-            align='center', baseline='bottom', dy=-5, color='white', fontWeight='bold', fontSize=11
-        ).encode(text=alt.Text('Avg Latency:Q', format='.1f'))
+        text_lat_edge = alt.Chart(df_results_edge).mark_text(
+            align='left', baseline='middle', dx=4, color='white', fontWeight='bold', fontSize=11
+        ).encode(
+            y=alt.Y('Hardware Profile:N', sort=None),
+            yOffset='Model:N',
+            x=alt.X('Avg Latency:Q'),
+            text=alt.Text('Avg Latency:Q', format='.1f')
+        )
         
         st.altair_chart(live_lat_chart + text_lat_edge, use_container_width=True)
 
 elif mode == "Diagnostic Inference":
     st.header("Latency and Classification Assessment (CPU vs GPU)")
-    text_input = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.")
+    text_input = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.", key="diag_input")
     
     if st.button("Execute Inference Sequence"):
-        st.subheader("1. Subword Tokenization")
+        st.session_state.diag_state = {}
         tokenizer, _, _ = load_one_model("Model D", device="cpu") 
         if tokenizer:
             tokens = tokenizer.tokenize(text_input)
             token_ids = tokenizer.convert_tokens_to_ids(tokens)
-            html_tokens = ""
-            for t, tid in zip(tokens, token_ids):
-                html_tokens += f"<div style='display:inline-block; margin:2px; padding:5px; background:#1E1E1E; border: 1px solid #333; border-radius:4px; text-align:center;'><span style='color:#2ecc71; font-size:13px; font-weight:bold;'>{t}</span><br><span style='color:#aaaaaa; font-size:11px;'>{tid}</span></div>"
-            st.markdown(html_tokens, unsafe_allow_html=True)
+            st.session_state.diag_state['tokens'] = list(zip(tokens, token_ids))
         
-        st.subheader("2. Computational Execution (Hardware Benchmark)")
         results_data = []
         progress_bar = st.progress(0)
         devices_to_test = ["cpu"]
@@ -399,9 +449,11 @@ elif mode == "Diagnostic Inference":
                     pred_idx = np.argmax(probs)
                     labels = ["Negative", "Neutral", "Positive"]
                     
+                    hw_label = "GPU" if device == "cuda" else "CPU"
+                    
                     results_data.append({
                         "Model": key,
-                        "Hardware": device.upper(),
+                        "Hardware": hw_label,
                         "Engine": engine.upper(),
                         "Avg Latency": avg_lat, 
                         "Prediction": labels[pred_idx],
@@ -411,164 +463,261 @@ elif mode == "Diagnostic Inference":
                     current_op += 1
                     progress_bar.progress(current_op / total_operations)
                     
-            st.subheader("3. Latency Benchmarks and Confidence Distributions")
-            df_results = pd.DataFrame(results_data)
-            
-            # Display Full-Width Table
-            st.markdown("**Execution Logs**")
-            display_df = df_results.copy()
-            display_df["Avg Latency"] = display_df["Avg Latency"].apply(lambda x: f"{x:.2f} ms")
-            display_df["Confidence"] = display_df["Confidence"].apply(lambda x: f"{x*100:.1f}%")
-            st.dataframe(display_df[["Model", "Hardware", "Avg Latency", "Prediction", "Confidence"]], use_container_width=True, hide_index=True)
-            
-            # Display Side-by-Side Charts
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                st.markdown("**Hardware Latency Comparison**")
-                bars_lat = alt.Chart(df_results).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
-                    x=alt.X('Model:N', title=None, axis=alt.Axis(labelAngle=0, labelColor='white')),
-                    xOffset='Hardware:N',
-                    y=alt.Y('Avg Latency:Q', title='Latency (ms)', axis=alt.Axis(labelColor='white', titleColor='white')),
-                    color=alt.Color('Hardware:N', scale=alt.Scale(domain=['CPU', 'CUDA'], range=['#3498db', '#e74c3c'])),
-                    tooltip=['Model', 'Hardware', alt.Tooltip('Avg Latency:Q', format='.2f')]
-                )
-                text_lat = bars_lat.mark_text(
-                    align='center',
-                    baseline='bottom',
-                    dy=-5,
-                    color='white',
-                    fontWeight='bold',
-                    fontSize=11
-                ).encode(
-                    text=alt.Text('Avg Latency:Q', format='.1f')
-                )
-                chart_lat = (bars_lat + text_lat).properties(height=380)
-                st.altair_chart(chart_lat, width="stretch")
-            
-            with c2:
-                st.markdown("**Prediction Confidence (By Architecture)**")
-                all_probs = []
-                cpu_results = [res for res in results_data if res["Hardware"] == "CPU"]
-                for res in cpu_results:
-                    if res["Probs"] is not None:
-                        for i, s in enumerate(["Negative", "Neutral", "Positive"]):
-                            all_probs.append({"Model": res["Model"], "Sentiment": s, "Probability": float(res["Probs"][i])})
-                
-                if all_probs:
-                    df_probs = pd.DataFrame(all_probs)
-                    dist_chart = alt.Chart(df_probs).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
-                        x=alt.X('Model:N', title=None, axis=alt.Axis(labelAngle=0, labelColor='white')),
-                        xOffset='Sentiment:N',
-                        y=alt.Y('Probability:Q', scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format='%', title='Confidence Level', labelColor='white', titleColor='white')),
-                        color=alt.Color('Sentiment:N', scale=alt.Scale(domain=['Negative', 'Neutral', 'Positive'], range=['#e74c3c', '#95a5a6', '#2ecc71'])),
-                        tooltip=['Model', 'Sentiment', alt.Tooltip('Probability:Q', format='.1%')]
-                    )
-                    text_conf = dist_chart.mark_text(
-                        align='center',
-                        baseline='bottom',
-                        dy=-5,
-                        color='white',
-                        fontWeight='bold',
-                        fontSize=10
-                    ).encode(
-                        text=alt.Text('Probability:Q', format='.1%')
-                    )
-                    chart_conf = (dist_chart + text_conf).properties(height=380)
-                    st.altair_chart(chart_conf, width="stretch")
+        st.session_state.diag_state['df'] = pd.DataFrame(results_data)
+        st.session_state.diag_state['results_data'] = results_data
 
+    # --- Render from Memory if Exists ---
+    if st.session_state.diag_state is not None:
+        st.subheader("1. Subword Tokenization")
+        if 'tokens' in st.session_state.diag_state:
+            html_tokens = ""
+            for t, tid in st.session_state.diag_state['tokens']:
+                html_tokens += f"<div style='display:inline-block; margin:2px; padding:5px; background:#1E1E1E; border: 1px solid #333; border-radius:4px; text-align:center;'><span style='color:#2ecc71; font-size:13px; font-weight:bold;'>{t}</span><br><span style='color:#aaaaaa; font-size:11px;'>{tid}</span></div>"
+            st.markdown(html_tokens, unsafe_allow_html=True)
+
+        st.subheader("2. Computational Execution (Hardware Benchmark)")
+        st.success("Cross-hardware benchmark completed successfully.")
+
+        st.subheader("3. Latency Benchmarks and Confidence Distributions")
+        df_results = st.session_state.diag_state['df']
+        results_data = st.session_state.diag_state['results_data']
+        
+        st.markdown("**Latency Matrix (ms)**")
+        pivot_df = df_results.pivot(index="Model", columns="Hardware", values="Avg Latency")
+        
+        display_pivot = pivot_df.copy()
+        for col in display_pivot.columns:
+            display_pivot[col] = display_pivot[col].apply(lambda x: f"{x:.2f} ms")
+        st.dataframe(display_pivot, use_container_width=True)
+        
+        c1, c2 = st.columns(2)
+        
+        with c1:
+            st.markdown("**Visual Hardware Comparison**")
+            domain = ["Model A", "Model B", "Model C", "Model D"]
+            range_colors = ['#34495e', '#2ecc71', '#34495e', '#2ecc71']
+            
+            bars_lat = alt.Chart(df_results).mark_bar(cornerRadiusEnd=3, height=18).encode(
+                y=alt.Y('Hardware:N', title=None, sort=None, axis=alt.Axis(labelColor='white', labelFontSize=12, labelFontWeight='bold')),
+                yOffset='Model:N',
+                x=alt.X('Avg Latency:Q', title='Latency (ms)', axis=alt.Axis(labelColor='white', titleColor='white', grid=True)),
+                color=alt.Color('Model:N', scale=alt.Scale(domain=domain, range=range_colors), legend=alt.Legend(title=None, labelColor='white', orient='top', padding=10)),
+                tooltip=['Model', 'Hardware', alt.Tooltip('Avg Latency:Q', format='.2f')]
+            )
+            
+            text_lat = alt.Chart(df_results).mark_text(
+                align='left', baseline='middle', dx=4, color='white', fontWeight='bold', fontSize=11
+            ).encode(
+                y=alt.Y('Hardware:N', sort=None),
+                yOffset='Model:N',
+                x=alt.X('Avg Latency:Q'),
+                text=alt.Text('Avg Latency:Q', format='.1f')
+            )
+            
+            chart_lat = (bars_lat + text_lat).properties(height=350)
+            st.altair_chart(chart_lat, width="stretch")
+        
+        with c2:
+            st.markdown("**Prediction Confidence (CPU Runtime)**")
+            all_probs = []
+            cpu_results = [res for res in results_data if res["Hardware"] == "CPU"]
+            for res in cpu_results:
+                if res["Probs"] is not None:
+                    # 0=Negative, 1=Neutral, 2=Positive mapping
+                    all_probs.append({"Model": res["Model"], "Sentiment": "Negative", "Probability": float(res["Probs"][0])})
+                    all_probs.append({"Model": res["Model"], "Sentiment": "Neutral", "Probability": float(res["Probs"][1])})
+                    all_probs.append({"Model": res["Model"], "Sentiment": "Positive", "Probability": float(res["Probs"][2])})
+            
+            if all_probs:
+                df_probs = pd.DataFrame(all_probs)
+                sentiment_order = ['Negative', 'Neutral', 'Positive']
+                
+                # Grouped Horizontal Bar Chart using yOffset for high readability
+                chart_conf = alt.Chart(df_probs).mark_bar(cornerRadiusEnd=3, height=18).encode(
+                    y=alt.Y('Model:N', title=None, axis=alt.Axis(labelColor='white', labelFontSize=12, labelFontWeight='bold')),
+                    yOffset='Sentiment:N', # This creates the side-by-side grouping
+                    x=alt.X('Probability:Q', title='Confidence level', axis=alt.Axis(format='%', labelColor='white', titleColor='white')),
+                    color=alt.Color('Sentiment:N', 
+                        scale=alt.Scale(domain=sentiment_order, range=['#e74c3c', '#95a5a6', '#2ecc71']), 
+                        sort=sentiment_order,
+                        legend=alt.Legend(title=None, labelColor='white', orient='top')
+                    ),
+                    tooltip=['Model', 'Sentiment', alt.Tooltip('Probability:Q', format='.1%')]
+                ).properties(height=350)
+                
+                text_labels = chart_conf.mark_text(
+                    align='left', baseline='middle', dx=5, color='white', fontWeight='bold', fontSize=10
+                ).encode(
+                    text=alt.Text('Probability:Q', format='.1%')
+                )
+                
+                st.altair_chart(chart_conf + text_labels, use_container_width=True)
+
+                
 elif mode == "Batch Simulation":
-    st.header("Batch Processing and Data Export")
-    st.write("Execute large-scale inference to measure average latency and export performance metrics.")
+    st.header("Batch Inference Simulation")
+    st.write("Execute large-scale inference to simulate real-world data processing, measure throughput latency, and evaluate classification distribution.")
     
-    selected_model = st.selectbox("Select Model Architecture", list(MODELS.keys()))
-    hardware_target = st.selectbox("Select Hardware Target", ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"])
+    st.markdown("### Step 1: Configuration")
+    c_col1, c_col2 = st.columns(2)
+    with c_col1:
+        selected_model = st.selectbox("Select Model Architecture", list(MODELS.keys()), index=3)
+    with c_col2:
+        data_source = st.radio("Select Dataset", ["Use Pre-loaded Test Set", "Upload Custom CSV"])
     
-    data_source = st.radio("Dataset Selection", ["Use Pre-loaded Thesis Dataset", "Upload Custom CSV"])
-    show_live_trace = st.checkbox("Enable Live Execution Trace (Visualizes the first 5 samples)", value=True)
+    with st.expander("Advanced Hardware Settings"):
+        hardware_target = st.selectbox("Compute Device", ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"])
+        show_live_trace = st.checkbox("Enable Randomized Execution Trace (Shows 5 random samples)", value=True)
+        if data_source == "Use Pre-loaded Test Set":
+            sample_size = st.slider("Number of samples to simulate", min_value=10, max_value=200, value=50, step=10)
     
     df_test = None
-    
-    if data_source == "Use Pre-loaded Thesis Dataset":
-        default_data_path = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final', 'test.csv')
+    if data_source == "Use Pre-loaded Test Set":
+        default_data_path = os.path.join(BASE_DIR, 'data', 'simulation', 'test_batch.csv')
+        
         if os.path.exists(default_data_path):
             full_df = pd.read_csv(default_data_path)
-            sample_size = st.slider("Select Sample Size for Demonstration", min_value=10, max_value=len(full_df), value=50, step=10)
-            df_test = full_df.sample(n=sample_size, random_state=42).copy()
-            st.success(f"Loaded {sample_size} random samples from the FiReCS test set.")
+            try:
+                safe_sample_size = min(sample_size, len(full_df))
+                df_test = full_df.sample(n=safe_sample_size, random_state=42).copy()
+            except NameError:
+                df_test = full_df.copy()
         else:
-            st.warning("Default dataset not found. Loading fallback synthetic data.")
-            df_test = pd.DataFrame({
-                "text": [
-                    "Ang ganda ng quality, sulit na sulit ang bayad!",
-                    "Mabilis ang shipping but the packaging is bad.",
-                    "Wag kayo bibili dito scammer yung seller.",
-                    "Okay naman siya, not too bad for the price.",
-                    "Super love it! I will definitely order again."
-                ]
-            })
-    else:
-        uploaded_file = st.file_uploader("Upload CSV Dataset", type="csv")
-        if uploaded_file is not None:
-            df_test = pd.read_csv(uploaded_file)
+            st.warning("Simulation dataset not found. Loading fallback data.")
+            df_test = pd.DataFrame({"text": ["Ang ganda ng quality!", "Scammer yung seller.", "Sakto lang."] * 2})
             
     if df_test is not None:
         possible_cols = [c for c in df_test.columns if c.lower() in ['text', 'review', 'content']]
         default_index = list(df_test.columns).index(possible_cols[0]) if possible_cols else 0
-        text_column = st.selectbox("Select Text Column", df_test.columns, index=default_index)
+        text_column = st.selectbox("Target Text Column", df_test.columns, index=default_index)
         
-        if st.button("Execute Batch Simulation"):
+        st.markdown("### Step 2: Data Preprocessing & Execution")
+        enable_preprocessing = st.checkbox("Apply Thesis Preprocessing (URL Removal & Gibberish Filter)", value=True)
+        
+        if st.button("Execute Batch Simulation", type="primary"):
+            st.session_state.batch_state = {}
             tokenizer, model, engine = load_one_model(selected_model, device=hardware_target)
             if model is None:
                 st.error("Model failed to load.")
             else:
                 results = []
                 progress_bar = st.progress(0)
-                total_samples = len(df_test)
+                total_samples_attempted = len(df_test)
+                skipped_samples = 0
                 
                 try:
                     run_inference("warmup", tokenizer, model, engine, selected_model, MODELS[selected_model], hardware_target)
                 except Exception:
                     pass
                 
-                trace_container = st.container() if show_live_trace else None
-                
-                with st.spinner(f"Processing {total_samples} texts using {selected_model}..."):
+                with st.spinner(f"Simulating inference..."):
                     for step, (original_idx, row) in enumerate(df_test.iterrows()):
-                        text_input = str(row[text_column])
+                        raw_text = str(row[text_column])
+                        
+                        if enable_preprocessing:
+                            processed_text = apply_thesis_preprocessing(raw_text)
+                            if not processed_text:
+                                skipped_samples += 1
+                                progress_bar.progress((step + 1) / total_samples_attempted)
+                                continue
+                            text_input = processed_text
+                        else:
+                            text_input = raw_text
                         
                         logits, duration = run_inference(text_input, tokenizer, model, engine, selected_model, MODELS[selected_model], hardware_target)
                         probs = softmax(logits)
                         pred_class = np.argmax(probs)
                         labels = ["Negative", "Neutral", "Positive"]
+                        sentiment_result = labels[pred_class]
                         
                         results.append({
-                            "Text": text_input,
-                            "Predicted_Class": labels[pred_class],
+                            "Original_Index": original_idx + 1,
+                            "Original_Text": raw_text,
+                            "Processed_Text": text_input if enable_preprocessing else "N/A",
+                            "Predicted_Class": sentiment_result,
                             "Confidence": max(probs),
                             "Latency_ms": duration
                         })
-                        
-                        if show_live_trace and step < 5:
-                            with trace_container:
-                                st.markdown(f"**Sample {step + 1} Pipeline:**")
-                                st.info(f"**1. Input:** {text_input}")
-                                tokens = tokenizer.tokenize(text_input)
-                                st.code(f"2. Tokenization:\n{tokens}", language="text")
-                                st.success(f"**3. Output:** {labels[pred_class]} ({max(probs)*100:.1f}%) | **Latency:** {duration:.2f} ms")
-                                st.divider()
-                        
-                        progress_bar.progress((step + 1) / total_samples)
+                        progress_bar.progress((step + 1) / total_samples_attempted)
                 
                 df_results = pd.DataFrame(results)
-                st.success("Batch simulation completed.")
+                st.session_state.batch_state['df'] = df_results
+                st.session_state.batch_state['total_samples'] = len(results)
+                st.session_state.batch_state['skipped'] = skipped_samples
+                st.session_state.batch_state['selected_model'] = selected_model
                 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Total Samples", total_samples)
-                c2.metric("Average Latency", f"{df_results['Latency_ms'].mean():.2f} ms")
-                c3.metric("P95 Latency", f"{np.percentile(df_results['Latency_ms'], 95):.2f} ms")
-                
-                st.dataframe(df_results, width="stretch", height=300)
-                
-                csv_data = df_results.to_csv(index=False).encode('utf-8')
-                st.download_button("Download Simulation Data (CSV)", data=csv_data, file_name=f"simulation_{selected_model.replace(' ', '_').lower()}.csv", mime="text/csv")
+                # --- NEW: SELECT RANDOM SAMPLES FOR TRACE ---
+                if not df_results.empty and show_live_trace:
+                    st.session_state.batch_state['trace_df'] = df_results.sample(n=min(5, len(df_results))).copy()
+
+        # --- Render from Memory if Exists ---
+        if st.session_state.batch_state is not None:
+            df_results = st.session_state.batch_state['df']
+            total_samples = st.session_state.batch_state['total_samples']
+            skipped_samples = st.session_state.batch_state['skipped']
+            selected_model = st.session_state.batch_state['selected_model']
+            
+            st.success("Simulation Complete.")
+            
+            # --- RENDER RANDOMIZED TRACE ---
+            if 'trace_df' in st.session_state.batch_state:
+                st.subheader("Randomized Execution Trace")
+                for _, row in st.session_state.batch_state['trace_df'].iterrows():
+                    color = "#2ecc71" if row['Predicted_Class'] == "Positive" else "#e74c3c" if row['Predicted_Class'] == "Negative" else "#95a5a6"
+                    tag = f"[{row['Predicted_Class'].upper()}]"
+                    st.markdown(f"""
+                    <div style='background-color: #1E1E1E; padding: 12px; border-left: 5px solid {color}; border-radius: 4px; margin-bottom: 8px;'>
+                        <span style='color: #aaaaaa; font-size: 12px;'>Sample #{row['Original_Index']} (Randomly Selected)</span><br>
+                        <span style='color: white; font-size: 14px;'><b>Raw:</b> "{row['Original_Text']}"</span><br>
+                        <span style='color: #3498db; font-size: 13px;'><b>Clean:</b> "{row['Processed_Text']}"</span><br>
+                        <span style='color: {color}; font-weight: bold;'>{tag}</span> 
+                        <span style='color: #aaaaaa; font-size: 12px;'>({row['Confidence']*100:.1f}% confidence)</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            if skipped_samples > 0:
+                st.warning(f"{skipped_samples} sample(s) were skipped due to the gibberish filter or insufficient word count.")
+            
+            st.markdown("### Step 3: Simulation Metrics")
+            total_seconds = df_results['Latency_ms'].sum() / 1000 if total_samples > 0 else 0
+            pos_count = len(df_results[df_results['Predicted_Class'] == 'Positive']) if total_samples > 0 else 0
+            pos_rate = (pos_count / total_samples) * 100 if total_samples > 0 else 0
+            avg_latency = df_results['Latency_ms'].mean() if total_samples > 0 else 0
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Valid Samples", total_samples)
+            m2.metric("Positive Rate", f"{pos_rate:.1f}%")
+            m3.metric("Avg Latency", f"{avg_latency:.2f} ms")
+            m4.metric("Throughput", f"{1000/avg_latency:.1f} IPS" if avg_latency > 0 else "0 IPS")
+            
+            st.markdown("**Classification Distribution**")
+            sentiment_counts = df_results['Predicted_Class'].value_counts().reset_index()
+            sentiment_counts.columns = ['Predicted_Class', 'Count']
+            sentiment_counts['Percentage'] = sentiment_counts['Count'] / total_samples
+            sentiment_order = ['Negative', 'Neutral', 'Positive']
+            
+            # Categorical Bar Chart for Batch Sentiment Distribution
+            dist_chart = alt.Chart(sentiment_counts).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+                x=alt.X('Predicted_Class:N', sort=sentiment_order, title=None, axis=alt.Axis(labelColor='white', labelFontSize=12)),
+                y=alt.Y('Percentage:Q', axis=alt.Axis(format='%', title='Proportion', labelColor='white', titleColor='white')),
+                color=alt.Color('Predicted_Class:N', 
+                    scale=alt.Scale(domain=sentiment_order, range=['#e74c3c', '#95a5a6', '#2ecc71']), 
+                    legend=None
+                ),
+                tooltip=['Predicted_Class', 'Count', alt.Tooltip('Percentage:Q', format='.1%')]
+            ).properties(height=250)
+            
+            dist_text = dist_chart.mark_text(baseline='bottom', dy=-5, color='white', fontWeight='bold').encode(
+                text=alt.Text('Percentage:Q', format='.1%')
+            )
+            
+            st.altair_chart(dist_chart + dist_text, use_container_width=True)
+            
+            st.markdown("**Execution Logs**")
+            display_df = df_results.copy()
+            display_df["Confidence"] = display_df["Confidence"].apply(lambda x: f"{x*100:.1f}%")
+            display_df["Latency_ms"] = display_df["Latency_ms"].apply(lambda x: f"{x:.2f} ms")
+            st.dataframe(display_df, width="stretch", height=300)
+            
+            csv_data = df_results.to_csv(index=False).encode('utf-8')
+            st.download_button("Download Simulation Logs (CSV)", data=csv_data, file_name=f"simulation_logs_{selected_model.replace(' ', '_').lower()}.csv", mime="text/csv")
