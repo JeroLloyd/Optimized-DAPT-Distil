@@ -22,10 +22,10 @@ echo.
 @REM python src/training/05_train_stage1_dapt.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Stage 1 Failed. & pause & exit /b %errorlevel%)
 
-@REM :: --- STAGE 2: SUPERVISED FINE-TUNING ---
-@REM echo [2/12] Running Stage 2: Fine-tuning...
-@REM python src/training/06_train_stage2_finetune.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Stage 2 Failed. & pause & exit /b %errorlevel%)
+:: --- STAGE 2: SUPERVISED FINE-TUNING ---
+echo [2/12] Running Stage 2: Fine-tuning...
+python src/training/06_train_stage2_finetune.py
+if %errorlevel% neq 0 (echo [ERROR] Stage 2 Failed. & pause & exit /b %errorlevel%)
 
 @REM :: --- STAGE 3: ONNX INT8 QUANTIZATION ---
 @REM echo [3/12] Running Stage 3: Optimization (Model D)...
@@ -65,14 +65,14 @@ echo.
 @REM python src/validation/12_error_analysis.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Error Analysis 1 Failed. & pause & exit /b %errorlevel%)
 
-echo [11/12] Generating Error Analysis (Models C, D)...
-python src/validation/12_error_analysis_model_C_D.py
-if %errorlevel% neq 0 (echo [ERROR] Error Analysis 2 Failed. & pause & exit /b %errorlevel%)
+@REM echo [11/12] Generating Error Analysis (Models C, D)...
+@REM python src/validation/12_error_analysis_model_C_D.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Error Analysis 2 Failed. & pause & exit /b %errorlevel%)
 
-:: --- VISUALIZATION ---
-echo [12/12] Generating Pareto Frontiers and Charts...
-python src/validation/10_visualize_results.py
-if %errorlevel% neq 0 (echo [ERROR] Visualization Failed. & pause & exit /b %errorlevel%)
+@REM :: --- VISUALIZATION ---
+@REM echo [12/12] Generating Pareto Frontiers and Charts...
+@REM python src/validation/10_visualize_results.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Visualization Failed. & pause & exit /b %errorlevel%)
 
 echo.
 echo ===========================================================

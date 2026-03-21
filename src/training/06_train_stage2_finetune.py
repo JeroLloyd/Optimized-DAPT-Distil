@@ -232,18 +232,26 @@ def main():
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=2)] # Aligned with Table 7
             )
 
-            trainer.train()
+            # Run training and capture output metrics
+            train_result = trainer.train()
+            
+            # Extract time and epoch data
+            total_train_time = train_result.metrics.get("train_runtime", 0.0)
+            epochs_run = trainer.state.epoch
+            avg_epoch_time = total_train_time / epochs_run if epochs_run > 0 else 0.0
             
             vram_mb = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0
             metrics = trainer.evaluate()
             current_f1 = metrics['eval_macro_f1']
             
-            print(f"[RESULT] LR {lr} | F1: {current_f1:.4f} | Peak VRAM: {vram_mb:.2f} MB")
+            print(f"[RESULT] LR {lr} | F1: {current_f1:.4f} | Peak VRAM: {vram_mb:.2f} MB | Total Time: {total_train_time:.2f}s | Avg Epoch Time: {avg_epoch_time:.2f}s")
             
             log_history = trainer.state.log_history
             if log_history:
                 df_log = pd.DataFrame(log_history)
                 df_log['peak_vram_mb'] = round(vram_mb, 2)
+                df_log['total_train_time_s'] = round(total_train_time, 2)
+                df_log['avg_epoch_time_s'] = round(avg_epoch_time, 2)
                 clean_name = config['name'].split("(")[0].strip().replace(" ", "_").lower()
                 log_filename = f"{clean_name}_lr_{lr}.csv"
                 log_filepath = os.path.join(STAGE2_LOGS_DIR, log_filename)
@@ -253,7 +261,12 @@ def main():
             tokenizer.save_pretrained(temp_output_dir)
             
             all_search_results.append({
-                "Model_Name": config['name'], "Learning_Rate": lr, "Macro_F1": current_f1, "Peak_VRAM_MB": round(vram_mb, 2)
+                "Model_Name": config['name'], 
+                "Learning_Rate": lr, 
+                "Macro_F1": current_f1, 
+                "Peak_VRAM_MB": round(vram_mb, 2),
+                "Total_Time_s": round(total_train_time, 2),
+                "Avg_Epoch_Time_s": round(avg_epoch_time, 2)
             })
 
             if current_f1 > best_f1:

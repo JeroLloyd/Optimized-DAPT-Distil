@@ -1,2 +1,2 @@
 Model,Macro F1 Score,Accuracy,Best_Learning_Rate,Data_Source
-Authentic-Only DAPT (Ablation),0.8117,0.8101,1.5e-05,Official Test Set
+Authentic-Only DAPT (Ablation),0.8117,0.8045,1.5e-05,Official Test Set
