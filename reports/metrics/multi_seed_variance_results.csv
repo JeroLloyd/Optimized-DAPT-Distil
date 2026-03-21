@@ -1,6 +1,21 @@
-Evaluation_Type,Macro_F1_Score
-Seed 42,0.8091
-Seed 123,0.799
-Seed 777,0.8105
-Mean,0.8062
-Standard Deviation,0.0051
+Model,Seed,Accuracy,Macro_F1
+Model A,42,0.8015,0.8047
+Model A,123,0.8006,0.8042
+Model A,777,0.7977,0.8001
+Model B,42,0.8063,0.8091
+Model D,42,0.7996,0.7995
+Model B,123,0.7968,0.799
+Model D,123,0.7844,0.7863
+Model B,777,0.8073,0.8105
+Model D,777,0.8063,0.809
+Model C,42,0.8302,0.8317
+Model C,123,0.8092,0.8111
+Model C,777,0.8244,0.8255
+Model A,Mean,0.7999,0.803
+Model A,Standard Deviation,0.0016,0.0021
+Model B,Mean,0.8035,0.8062
+Model B,Standard Deviation,0.0047,0.0051
+Model D,Mean,0.7968,0.7983
+Model D,Standard Deviation,0.0092,0.0093
+Model C,Mean,0.8213,0.8228
+Model C,Standard Deviation,0.0089,0.0086

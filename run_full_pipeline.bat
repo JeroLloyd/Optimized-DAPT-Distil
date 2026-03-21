@@ -22,10 +22,10 @@ echo.
 @REM python src/training/05_train_stage1_dapt.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Stage 1 Failed. & pause & exit /b %errorlevel%)
 
-:: --- STAGE 2: SUPERVISED FINE-TUNING ---
-echo [2/12] Running Stage 2: Fine-tuning...
-python src/training/06_train_stage2_finetune.py
-if %errorlevel% neq 0 (echo [ERROR] Stage 2 Failed. & pause & exit /b %errorlevel%)
+@REM :: --- STAGE 2: SUPERVISED FINE-TUNING ---
+@REM echo [2/12] Running Stage 2: Fine-tuning...
+@REM python src/training/06_train_stage2_finetune.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Stage 2 Failed. & pause & exit /b %errorlevel%)
 
 @REM :: --- STAGE 3: ONNX INT8 QUANTIZATION ---
 @REM echo [3/12] Running Stage 3: Optimization (Model D)...
@@ -51,10 +51,10 @@ if %errorlevel% neq 0 (echo [ERROR] Stage 2 Failed. & pause & exit /b %errorleve
 @REM python src/validation/16_edge_cpu_emulation.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Emulation Failed. & pause & exit /b %errorlevel%)
 
-@REM :: --- STATISTICAL VALIDATION ---
-@REM echo [8/12] Running Multi-Seed Variance Test...
-@REM python src/validation/14_point4_validation.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Variance Test Failed. & pause & exit /b %errorlevel%)
+:: --- STATISTICAL VALIDATION ---
+echo [8/12] Running Multi-Seed Variance Test...
+python src/validation/14_point4_validation.py
+if %errorlevel% neq 0 (echo [ERROR] Variance Test Failed. & pause & exit /b %errorlevel%)
 
 @REM echo [9/12] Running Bootstrap Hypothesis Test...
 @REM python src/validation/15_point7_bootstrap.py
