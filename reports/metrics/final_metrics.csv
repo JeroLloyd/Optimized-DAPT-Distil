@@ -1,5 +1,5 @@
 Model ID,Model Name,Accuracy,Macro F1 Score,Avg Latency (Overall) ms,P95 Latency (ms),Model Size (MB),Runtime,Speedup Factor
-A,Model A (Base DistilmBERT),0.8015,0.8047,100.57,115.8,519.98,CPU_ONLY,1.0
-B,Model B (DAPT-DistilmBERT),0.8063,0.8091,104.96,116.66,519.98,CPU_ONLY,0.96
-C,Model C (XLM-R Base),0.8302,0.8317,198.55,225.57,1081.82,CPU_ONLY,0.51
-D,Model D (Optimized DAPT),0.7996,0.7995,35.71,39.19,133.21,CPU_ONLY,2.82
+A,Model A (Base DistilmBERT),0.8015,0.8047,164.08,681.18,519.98,CPU_ONLY,1.0
+B,Model B (DAPT-DistilmBERT),0.8063,0.8091,98.55,110.4,519.98,CPU_ONLY,1.66
+C,Model C (XLM-R Base),0.8302,0.8317,204.21,230.46,1081.82,CPU_ONLY,0.8
+D,Model D (Optimized DAPT),0.7996,0.7995,31.7,35.23,133.21,CPU_ONLY,5.18

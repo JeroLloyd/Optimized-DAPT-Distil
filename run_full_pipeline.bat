@@ -37,10 +37,10 @@ echo.
 @REM python src/validation/13_ablation_study.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Ablation Study Failed. & pause & exit /b %errorlevel%)
 
-@REM :: --- EVALUATION & METRICS ---
-@REM echo [5/12] Evaluating Final Metrics (CSV Generation)...
-@REM python src/validation/08_evaluate_metrics.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Evaluation Failed. & pause & exit /b %errorlevel%)
+:: --- EVALUATION & METRICS ---
+echo [5/12] Evaluating Final Metrics (CSV Generation)...
+python src/validation/08_evaluate_metrics.py
+if %errorlevel% neq 0 (echo [ERROR] Evaluation Failed. & pause & exit /b %errorlevel%)
 
 @REM echo [6/12] Running Academic Benchmark Simulation...
 @REM python src/validation/09_benchmark_simulation.py
@@ -52,9 +52,9 @@ echo.
 @REM if %errorlevel% neq 0 (echo [ERROR] Emulation Failed. & pause & exit /b %errorlevel%)
 
 :: --- STATISTICAL VALIDATION ---
-echo [8/12] Running Multi-Seed Variance Test...
-python src/validation/14_point4_validation.py
-if %errorlevel% neq 0 (echo [ERROR] Variance Test Failed. & pause & exit /b %errorlevel%)
+@REM echo [8/12] Running Multi-Seed Variance Test...
+@REM python src/validation/14_point4_validation.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Variance Test Failed. & pause & exit /b %errorlevel%)
 
 @REM echo [9/12] Running Bootstrap Hypothesis Test...
 @REM python src/validation/15_point7_bootstrap.py

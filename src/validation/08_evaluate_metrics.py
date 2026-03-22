@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import torch
 import onnxruntime as ort
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, set_seed
 from optimum.onnxruntime import ORTModelForSequenceClassification
 import warnings
@@ -39,8 +39,12 @@ BASE_DIR = os.path.dirname(SRC_DIR)
 
 TEST_DATA_PATH = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final', 'test.csv')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
+
+# Create dedicated reporting directories
 REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
+CM_DIR = os.path.join(REPORTS_DIR, 'confusion_matrices')
 os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs(CM_DIR, exist_ok=True)
 
 MODELS_TO_TEST = [
     ("A", "Model A (Base DistilmBERT)", os.path.join(MODELS_DIR, "model_a_base"), "pytorch"),
@@ -158,7 +162,7 @@ def main():
         print(f"[ERROR] Test data not found: {TEST_DATA_PATH}")
         return
 
-    # FIXED: Apply normalization before extracting lists to ensure scientific consistency
+    # Apply normalization before extracting lists
     df_raw = pd.read_csv(TEST_DATA_PATH)
     df = normalize_columns(df_raw)
     
@@ -196,6 +200,15 @@ def main():
            
             print(f"  Acc: {acc:.4f} | Macro F1: {f1:.4f} | Avg CPU Lat: {avg_lat_overall:.2f}ms")
            
+            # Calculate and save the confusion matrix to the dedicated folder
+            cm = confusion_matrix(labels, preds)
+            cm_df = pd.DataFrame(cm)
+            cm_df.index.name = 'True_Label'
+            cm_df.columns.name = 'Predicted_Label'
+            cm_path = os.path.join(CM_DIR, f"confusion_matrix_model_{model_id}.csv")
+            cm_df.to_csv(cm_path)
+            print(f"  Saved confusion matrix to {cm_path}")
+            
             raw_results.append({
                 "Model ID": model_id,
                 "Model Name": name,
