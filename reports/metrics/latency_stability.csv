@@ -1,5 +1,5 @@
-Model Name,Avg Latency (100 runs) ms,Avg Latency (1000 runs) ms,Avg Latency (Overall) ms
-Model A (Base DistilmBERT),244.54,167.36,164.08
-Model B (DAPT-DistilmBERT),95.55,98.07,98.55
-Model C (XLM-R Base),209.29,203.87,204.21
-Model D (Optimized DAPT),31.94,31.61,31.7
+Model Name,Avg Latency (100 runs) ms,Avg Latency (1000 runs) ms,Empirical Time Complexity (Latency ms)
+Model A (Base DistilmBERT),94.04,94.3,94.3
+Model B (DAPT-DistilmBERT),94.34,93.64,93.64
+Model C (XLM-R Base),187.27,186.52,186.58
+Model D (Optimized DAPT),31.47,31.44,31.42

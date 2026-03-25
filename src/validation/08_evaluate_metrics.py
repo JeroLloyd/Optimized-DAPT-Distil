@@ -208,17 +208,23 @@ def main():
             cm_path = os.path.join(CM_DIR, f"confusion_matrix_model_{model_id}.csv")
             cm_df.to_csv(cm_path)
             print(f"  Saved confusion matrix to {cm_path}")
+
+            # Define Theoretical Complexity Constants
+            H = 12 if "XLM-R" in name else 6
+            throughput_rps = (1000 / avg_lat_overall) if avg_lat_overall > 0 else 0
             
             raw_results.append({
                 "Model ID": model_id,
                 "Model Name": name,
                 "Accuracy": round(acc, 4),
                 "Macro F1 Score": round(f1, 4),
+                "Theoretical Time Complexity": f"O({H} * L^2 * d)",
+                "Theoretical Space Complexity": "O(P + H * L^2)",
+                "Empirical Time Complexity (Latency ms)": round(avg_lat_overall, 2),
                 "Avg Latency (100 runs) ms": round(lat_100, 2),
                 "Avg Latency (1000 runs) ms": round(lat_1000, 2),
-                "Avg Latency (Overall) ms": round(avg_lat_overall, 2),
-                "P95 Latency (ms)": round(p95_lat, 2),
-                "Model Size (MB)": round(size_mb, 2),
+                "Empirical Space Complexity (Storage MB)": round(size_mb, 2),
+                "Throughput (req/sec)": round(throughput_rps, 2),
                 "Runtime": "CPU_ONLY"
             })
             
@@ -230,21 +236,23 @@ def main():
     if raw_results:
         res_df = pd.DataFrame(raw_results)
         
-        if "Avg Latency (Overall) ms" in res_df.columns and len(res_df) > 0:
-            base_lat = res_df.iloc[0]["Avg Latency (Overall) ms"]
-            res_df["Speedup Factor"] = round(base_lat / res_df["Avg Latency (Overall) ms"], 2)
+        if "Empirical Time Complexity (Latency ms)" in res_df.columns and len(res_df) > 0:
+            base_lat = res_df.iloc[0]["Empirical Time Complexity (Latency ms)"]
+            res_df["Speedup Factor"] = round(base_lat / res_df["Empirical Time Complexity (Latency ms)"], 2)
 
         main_cols = [
             "Model ID", "Model Name", "Accuracy", "Macro F1 Score", 
-            "Avg Latency (Overall) ms", "P95 Latency (ms)", 
-            "Model Size (MB)", "Runtime", "Speedup Factor"
+            "Theoretical Time Complexity", "Theoretical Space Complexity",
+            "Empirical Time Complexity (Latency ms)", "Empirical Space Complexity (Storage MB)",
+            "Throughput (req/sec)", "Speedup Factor", "Runtime"
         ]
+        
         main_path = os.path.join(REPORTS_DIR, "final_metrics.csv")
         res_df[main_cols].to_csv(main_path, index=False)
-        
+
         stability_cols = [
             "Model Name", "Avg Latency (100 runs) ms", 
-            "Avg Latency (1000 runs) ms", "Avg Latency (Overall) ms"
+            "Avg Latency (1000 runs) ms", "Empirical Time Complexity (Latency ms)"
         ]
         stability_path = os.path.join(REPORTS_DIR, "latency_stability.csv")
         res_df[stability_cols].to_csv(stability_path, index=False)

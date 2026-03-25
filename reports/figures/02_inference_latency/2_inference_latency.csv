@@ -1,9 +1,9 @@
 Model Name,Short_Name,Latency_ms
-Model A (Base DistilmBERT),A (Base Distil),100.57
-Model A (Base DistilmBERT),A (Base Distil),100.57
-Model B (DAPT-DistilmBERT),B (DAPT-Distil),104.96
-Model B (DAPT-DistilmBERT),B (DAPT-Distil),104.96
-Model C (XLM-R Base),C (XLM-R Base),198.55
-Model C (XLM-R Base),C (XLM-R Base),198.55
-Model D (Optimized DAPT),D (Optimized DAPT),35.71
-Model D (Optimized DAPT),D (Optimized DAPT),35.71
+Model A (Base DistilmBERT),A (Base Distil),94.3
+Model A (Base DistilmBERT),A (Base Distil),94.3
+Model B (DAPT-DistilmBERT),B (DAPT-Distil),93.64
+Model B (DAPT-DistilmBERT),B (DAPT-Distil),93.64
+Model C (XLM-R Base),C (XLM-R Base),186.58
+Model C (XLM-R Base),C (XLM-R Base),186.58
+Model D (Optimized DAPT),D (Optimized DAPT),31.42
+Model D (Optimized DAPT),D (Optimized DAPT),31.42

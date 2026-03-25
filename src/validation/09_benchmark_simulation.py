@@ -149,13 +149,13 @@ def run_stress_test(name, path, runtime, texts, device="cpu"):
     return {
         "Model Name": name,
         "Device": device.upper(),
-        "Storage_MB": storage_mb,
-        "Memory_MB": mem_usage,
-        "Throughput_RPS": throughput,
-        "Load_Time_s": load_time,
-        "Latency_Mean_ms": avg_lat,
-        "Latency_StdDev_ms": std_lat,
-        "Latency_P95_ms": p95_lat
+        "Empirical Space Complexity (Storage MB)": round(storage_mb, 2),
+        "Empirical Space Complexity (RAM MB)": round(mem_usage, 2),
+        "Throughput (req/sec)": round(throughput, 2),
+        "Load Time (s)": round(load_time, 4),
+        "Empirical Time Complexity (Mean ms)": round(avg_lat, 2),
+        "Empirical Time Complexity (StdDev ms)": round(std_lat, 2),
+        "Empirical Time Complexity (P95 ms)": round(p95_lat, 2)
     }
 
 def main():

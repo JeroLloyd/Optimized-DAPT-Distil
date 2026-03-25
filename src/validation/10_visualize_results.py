@@ -53,14 +53,18 @@ def generate_visualizations():
     # --- FIX: ROBUST COLUMN MAPPING & DEDUPLICATION ---
     rename_map = {
         "Macro F1 Score": "Macro_F1",
-        "Avg Latency (Overall) ms": "Latency_ms",  # Maps the new overall latency column
-        "Avg Latency (ms)": "Latency_ms",          # Fallback if old column exists
+        "Empirical Time Complexity (Latency ms)": "Latency_ms",
+        "Avg Latency (Overall) ms": "Latency_ms", 
+        "Avg Latency (ms)": "Latency_ms",          
         "Speedup Factor": "Speedup"
     }
     df = df.rename(columns=rename_map)
 
-    # Handle Storage_MB collision safely
-    if "Model Size (MB)" in df.columns:
+    # Handle Storage_MB collision safely with new complexity headers
+    if "Empirical Space Complexity (Storage MB)" in df.columns:
+        df["Storage_MB"] = df["Empirical Space Complexity (Storage MB)"]
+        df = df.drop(columns=["Empirical Space Complexity (Storage MB)"])
+    elif "Model Size (MB)" in df.columns:
         if "Storage_MB" in df.columns:
             df["Storage_MB"] = df["Model Size (MB)"].fillna(df["Storage_MB"])
             df = df.drop(columns=["Model Size (MB)"])

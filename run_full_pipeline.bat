@@ -42,9 +42,9 @@ echo [5/12] Evaluating Final Metrics (CSV Generation)...
 python src/validation/08_evaluate_metrics.py
 if %errorlevel% neq 0 (echo [ERROR] Evaluation Failed. & pause & exit /b %errorlevel%)
 
-@REM echo [6/12] Running Academic Benchmark Simulation...
-@REM python src/validation/09_benchmark_simulation.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Benchmark Failed. & pause & exit /b %errorlevel%)
+echo [6/12] Running Academic Benchmark Simulation...
+python src/validation/09_benchmark_simulation.py
+if %errorlevel% neq 0 (echo [ERROR] Benchmark Failed. & pause & exit /b %errorlevel%)
 
 @REM :: --- HARDWARE EMULATION ---
 @REM echo [7/12] Running Edge CPU Hardware Emulation...
@@ -69,10 +69,10 @@ if %errorlevel% neq 0 (echo [ERROR] Evaluation Failed. & pause & exit /b %errorl
 @REM python src/validation/12_error_analysis_model_C_D.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Error Analysis 2 Failed. & pause & exit /b %errorlevel%)
 
-@REM :: --- VISUALIZATION ---
-@REM echo [12/12] Generating Pareto Frontiers and Charts...
-@REM python src/validation/10_visualize_results.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Visualization Failed. & pause & exit /b %errorlevel%)
+:: --- VISUALIZATION ---
+echo [12/12] Generating Pareto Frontiers and Charts...
+python src/validation/10_visualize_results.py
+if %errorlevel% neq 0 (echo [ERROR] Visualization Failed. & pause & exit /b %errorlevel%)
 
 echo.
 echo ===========================================================
