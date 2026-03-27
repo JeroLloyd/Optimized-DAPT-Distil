@@ -146,8 +146,13 @@ def load_thesis_metrics():
     
 
 def compute_research_metrics(df):
-    # Safely handle the updated column name from Stage 8
-    latency_col = "Avg Latency (Overall) ms" if "Avg Latency (Overall) ms" in df.columns else "Avg Latency (ms)"
+    # Dynamically find the correct latency column based on what Script 08 exported
+    if "Empirical Time Complexity (Latency ms)" in df.columns:
+        latency_col = "Empirical Time Complexity (Latency ms)"
+    elif "Avg Latency (Overall) ms" in df.columns:
+        latency_col = "Avg Latency (Overall) ms"
+    else:
+        latency_col = "Avg Latency (ms)" # Fallback
     
     # Calculate Speedup Factor
     if not df.empty:
@@ -164,10 +169,14 @@ def compute_research_metrics(df):
     df["Compute_Efficiency"] = (df["Macro F1 Score"] / df[latency_col]) * 1000
     
     # Storage Efficiency: F1 score achieved per MB of disk space
-    if "Model Size (MB)" in df.columns:
+    if "Empirical Space Complexity (Storage MB)" in df.columns:
+        df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Empirical Space Complexity (Storage MB)"]) * 1000
+    elif "Model Size (MB)" in df.columns:
         df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Model Size (MB)"]) * 1000
     elif "Storage_MB" in df.columns:
         df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Storage_MB"]) * 1000
+    else:
+        df["Storage_Efficiency"] = 0.0 # Fallback if missing
         
     df = df.rename(columns={latency_col: "Latency_ms", "Macro F1 Score": "Macro_F1", "Model Name": "Model_Name"})
     return df
@@ -248,6 +257,7 @@ if mode == "Evaluation Dashboard":
         st.error("Metrics file missing. Execute quantitative benchmarking script first.")
     else:
         df_plot = df_static.drop_duplicates(subset=['Model Name']).copy()
+        
         df_plot = compute_research_metrics(df_plot)
         
         st.subheader("Key Performance Indicators by Architecture")
