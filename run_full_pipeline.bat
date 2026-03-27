@@ -38,27 +38,29 @@ echo.
 @REM if %errorlevel% neq 0 (echo [ERROR] Ablation Study Failed. & pause & exit /b %errorlevel%)
 
 :: --- EVALUATION & METRICS ---
-echo [5/12] Evaluating Final Metrics (CSV Generation)...
-python src/validation/08_evaluate_metrics.py
-if %errorlevel% neq 0 (echo [ERROR] Evaluation Failed. & pause & exit /b %errorlevel%)
+@REM echo [5/12] Evaluating Final Metrics (CSV Generation)...
+@REM python src/validation/08_evaluate_metrics.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Evaluation Failed. & pause & exit /b %errorlevel%)
 
-echo [6/12] Running Academic Benchmark Simulation...
-python src/validation/09_benchmark_simulation.py
-if %errorlevel% neq 0 (echo [ERROR] Benchmark Failed. & pause & exit /b %errorlevel%)
+@REM echo [6/12] Running Academic Benchmark Simulation...
+@REM python src/validation/09_benchmark_simulation.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Benchmark Failed. & pause & exit /b %errorlevel%)
 
 @REM :: --- HARDWARE EMULATION ---
 @REM echo [7/12] Running Edge CPU Hardware Emulation...
 @REM python src/validation/16_edge_cpu_emulation.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Emulation Failed. & pause & exit /b %errorlevel%)
 
-:: --- STATISTICAL VALIDATION ---
-@REM echo [8/12] Running Multi-Seed Variance Test...
-@REM python src/validation/14_point4_validation.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Variance Test Failed. & pause & exit /b %errorlevel%)
 
-@REM echo [9/12] Running Bootstrap Hypothesis Test...
-@REM python src/validation/15_point7_bootstrap.py
-@REM if %errorlevel% neq 0 (echo [ERROR] Bootstrap Test Failed. & pause & exit /b %errorlevel%)
+echo [8/12] Running Bootstrap Hypothesis Test...
+python src/validation/15_point7_bootstrap.py
+if %errorlevel% neq 0 (echo [ERROR] Bootstrap Test Failed. & pause & exit /b %errorlevel%)
+
+:: --- STATISTICAL VALIDATION ---
+echo [9/12] Running Multi-Seed Variance Test...
+python src/validation/14_point4_validation.py
+if %errorlevel% neq 0 (echo [ERROR] Variance Test Failed. & pause & exit /b %errorlevel%)
+
 
 @REM :: --- ERROR ANALYSIS ---
 @REM echo [10/12] Generating Error Analysis (Models A, B, Ablation)...
@@ -69,10 +71,10 @@ if %errorlevel% neq 0 (echo [ERROR] Benchmark Failed. & pause & exit /b %errorle
 @REM python src/validation/12_error_analysis_model_C_D.py
 @REM if %errorlevel% neq 0 (echo [ERROR] Error Analysis 2 Failed. & pause & exit /b %errorlevel%)
 
-:: --- VISUALIZATION ---
-echo [12/12] Generating Pareto Frontiers and Charts...
-python src/validation/10_visualize_results.py
-if %errorlevel% neq 0 (echo [ERROR] Visualization Failed. & pause & exit /b %errorlevel%)
+@REM :: --- VISUALIZATION ---
+@REM echo [12/12] Generating Pareto Frontiers and Charts...
+@REM python src/validation/10_visualize_results.py
+@REM if %errorlevel% neq 0 (echo [ERROR] Visualization Failed. & pause & exit /b %errorlevel%)
 
 echo.
 echo ===========================================================

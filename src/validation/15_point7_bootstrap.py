@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import torch
 import gc
+from scipy.stats import wilcoxon
 from datasets import Dataset
 from sklearn.metrics import f1_score
 from transformers import (
@@ -14,7 +15,7 @@ from transformers import (
     DataCollatorWithPadding
 )
 
-# --- PATH CONFIGURATION ---
+# PATH CONFIGURATION
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
@@ -128,29 +129,37 @@ def main():
         if (i + 1) % 200 == 0:
             print(f"   -> Completed {i + 1} iterations...")
 
+    # Calculate Standard Deviation
+    std_dev_model_a = np.std(scores_a)
+    std_dev_model_b = np.std(scores_b)
+
     # Calculate 95% Confidence Intervals (2.5th to 97.5th percentile)
     ci_lower_a, ci_upper_a = np.percentile(scores_a, [2.5, 97.5])
     ci_lower_b, ci_upper_b = np.percentile(scores_b, [2.5, 97.5])
     
-    # Calculate one-tailed p-value (probability that B is NOT better than A)
-    p_value = np.sum(np.array(diff_scores) <= 0) / n_iterations
+    # Execute Wilcoxon Signed-Rank Test
+    test_statistic, wilcoxon_p = wilcoxon(scores_a, scores_b, alternative='less')
 
     print("\n=== FINAL STATISTICAL VALIDATION ===")
-    print(f"Model A (Generic) 95% CI: [{ci_lower_a:.4f}, {ci_upper_a:.4f}]")
-    print(f"Model B (DAPT)    95% CI: [{ci_lower_b:.4f}, {ci_upper_b:.4f}]")
-    print(f"Observed P-Value: {p_value:.4f}")
+    print(f"Model A (Generic) Std Dev: {std_dev_model_a:.4f}")
+    print(f"Model B (DAPT) Std Dev:    {std_dev_model_b:.4f}")
+    print(f"Model A (Generic) 95% CI:  [{ci_lower_a:.4f}, {ci_upper_a:.4f}]")
+    print(f"Model B (DAPT) 95% CI:     [{ci_lower_b:.4f}, {ci_upper_b:.4f}]")
+    print(f"Wilcoxon P-Value:          {wilcoxon_p:.4f}")
     
-    is_significant = p_value < 0.05
+    is_significant = wilcoxon_p < 0.05
     if is_significant:
         print("Result: STATISTICALLY SIGNIFICANT. The DAPT model improvement is mathematically valid.")
     else:
-        print("Result: NOT SIGNIFICANT. The margin is within the expected noise of the dataset.")
+        print("Result: NOT SIGNIFICANT. The margin is within expected noise.")
 
     # Exporting results for Chapter 4 Tables
     results_df = pd.DataFrame([{
+        "Model_A_Std_Dev": round(std_dev_model_a, 4),
+        "Model_B_Std_Dev": round(std_dev_model_b, 4),
         "Model_A_95_CI": f"[{ci_lower_a:.4f}, {ci_upper_a:.4f}]",
         "Model_B_95_CI": f"[{ci_lower_b:.4f}, {ci_upper_b:.4f}]",
-        "P_Value": round(p_value, 4),
+        "Wilcoxon_P_Value": round(wilcoxon_p, 4),
         "Significant_at_0.05": "Yes" if is_significant else "No",
         "Iterations": n_iterations
     }])

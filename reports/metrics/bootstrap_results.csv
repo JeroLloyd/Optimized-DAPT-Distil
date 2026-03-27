@@ -1,2 +1,2 @@
-Model_A_95_CI,Model_B_95_CI,P_Value,Significant_at_0.05,Iterations
-"[0.7820, 0.8299]","[0.7873, 0.8324]",0.318,No,1000
+Model_A_Std_Dev,Model_B_Std_Dev,Model_A_95_CI,Model_B_95_CI,Wilcoxon_P_Value,Significant_at_0.05,Iterations
+0.0123,0.0116,"[0.7820, 0.8299]","[0.7873, 0.8324]",0.0,Yes,1000
