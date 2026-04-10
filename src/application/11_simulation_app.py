@@ -1,23 +1,49 @@
+
+"""
+Sentiment Analysis Evaluation Framework (Streamlit UI).
+
+This module provides an interactive web interface to evaluate, benchmark, and 
+compare the performance of multiple sequence classification models (PyTorch and ONNX).
+It includes dashboards for quantitative metrics, live edge hardware emulation, 
+diagnostic inference execution, and large-scale batch simulation.
+"""
+
+import os
+import re
+import sys
+import time
+import platform
+
+import torch
+import numpy as np
+import pandas as pd
+import altair as alt
 import streamlit as st
 import onnxruntime as ort
-import numpy as np
-import os
-import time
-import pandas as pd
-import torch
 import matplotlib.pyplot as plt
-import platform
-import altair as alt
+from scipy.special import softmax
+
 import transformers
 import transformers.models.auto
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from scipy.special import softmax
-import re
 
-# --- NEW PREPROCESSING ALGORITHM ---
+# ==============================================================================
+# NEW PREPROCESSING ALGORITHM
+# ==============================================================================
 def apply_thesis_preprocessing(text):
-    """Replicates the text cleaning and gibberish salvaging from script 04."""
-    # 1. Basic Clean
+    """
+    Replicates the text cleaning and gibberish salvaging logic from Script 04.
+    Applies lowercasing, URL removal, alphanumeric filtering, and a gibberish 
+    filter based on vowel ratios.
+
+    Args:
+        text (str): The raw input text.
+
+    Returns:
+        str or None: The cleaned text string, or None if the text is 
+                     classified as gibberish or is too short.
+    """
+    # 1. Basic Normalization
     text = str(text).lower()
     text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
     text = re.sub(r'[^a-z0-9\s]', '', text)
@@ -26,16 +52,24 @@ def apply_thesis_preprocessing(text):
     # 2. Gibberish Filtering
     words = text.split()
     clean_words = []
+    
     for word in words:
-        if len(word) > 15: continue
+        if len(word) > 15: 
+            continue
+            
         vowels = len(re.findall(r'[aeiou]', word))
         if len(word) > 0:
             ratio = vowels / len(word)
-            if ratio < 0.2 or ratio > 0.9: continue
+            if ratio < 0.2 or ratio > 0.9: 
+                continue
         clean_words.append(word)
         
     return " ".join(clean_words) if len(clean_words) >= 3 else None
 
+
+# ==============================================================================
+# HARDWARE AND COMPATIBILITY PATCHES
+# ==============================================================================
 # Strict Inter-op threading limit for accurate Edge CPU Emulation
 try:
     torch.set_num_interop_threads(1)
@@ -43,6 +77,7 @@ except Exception:
     pass
 
 class MockAutoModelForVision2Seq:
+    """Mock class injected into transformers to bypass missing Vision2Seq dependencies."""
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         raise NotImplementedError("Mock class for compatibility.")
@@ -53,7 +88,10 @@ setattr(transformers.models.auto, "AutoModelForVision2Seq", MockAutoModelForVisi
 if not hasattr(transformers.utils, 'is_offline_mode'):
     transformers.utils.is_offline_mode = lambda: False
 
-# --- PATH CONFIGURATION ---
+
+# ==============================================================================
+# PATH CONFIGURATION
+# ==============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
@@ -62,7 +100,10 @@ MODELS_DIR = os.path.join(BASE_DIR, 'models')
 RESULTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
 RESULTS_PATH = os.path.join(RESULTS_DIR, "final_metrics.csv")
 
-# --- PAGE CONFIG ---
+
+# ==============================================================================
+# PAGE CONFIGURATION & STYLING
+# ==============================================================================
 st.set_page_config(page_title="Evaluation Framework", layout="wide", page_icon="⚡")
 
 st.markdown("""
@@ -76,7 +117,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- MODEL REGISTRY ---
+
+# ==============================================================================
+# MODEL REGISTRY
+# ==============================================================================
 MODELS = {
     "Model A": {"name": "Base DistilmBERT", "path": os.path.join(MODELS_DIR, "model_a_base"), "type": "pytorch"},
     "Model B": {"name": "DAPT-DistilmBERT", "path": os.path.join(MODELS_DIR, "model_b_dapt"), "type": "pytorch"},
@@ -84,9 +128,23 @@ MODELS = {
     "Model D": {"name": "Optimized ONNX", "path": os.path.join(MODELS_DIR, "model_d_onnx"), "tokenizer": os.path.join(MODELS_DIR, "model_d_onnx"), "type": "onnx"}
 }
 
-# --- RESOURCE LOADERS ---
+
+# ==============================================================================
+# RESOURCE LOADERS
+# ==============================================================================
 @st.cache_resource
 def load_one_model(key, device="cpu"):
+    """
+    Loads a specific model and its associated tokenizer into memory.
+    Caches the resource to prevent redundant loading in Streamlit.
+
+    Args:
+        key (str): The model identifier from the MODELS registry.
+        device (str): The target processing device ("cpu" or "cuda").
+
+    Returns:
+        tuple: (tokenizer, model, engine_type). Returns (None, None, "error") upon failure.
+    """
     try:
         model_conf = MODELS[key]
         path = model_conf["path"]
@@ -95,6 +153,7 @@ def load_one_model(key, device="cpu"):
         if not os.path.exists(path) and not os.path.exists(tok_path):
              return None, None, "error"
 
+        # Load Tokenizer with proper fallbacks
         try:
             tokenizer = AutoTokenizer.from_pretrained(tok_path)
         except Exception:
@@ -103,6 +162,7 @@ def load_one_model(key, device="cpu"):
             else:
                 tokenizer = AutoTokenizer.from_pretrained("distilbert-base-multilingual-cased")
 
+        # Load Model based on engine type (ONNX vs PyTorch)
         if model_conf["type"] == "onnx":
             options = ort.SessionOptions()
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -115,6 +175,7 @@ def load_one_model(key, device="cpu"):
                 model = ort.InferenceSession(model_file, options, providers=["CPUExecutionProvider"])
                 
             return tokenizer, model, "onnx"
+            
         else:
             model = AutoModelForSequenceClassification.from_pretrained(path)
             model.to(device)
@@ -125,17 +186,36 @@ def load_one_model(key, device="cpu"):
         print(f"Error loading {key}: {e}")
         return None, None, "error"
 
+
 def get_edge_onnx_session(path, cores):
-    """Creates a temporary, non-cached ONNX session with strictly limited threads."""
+    """
+    Creates a temporary, non-cached ONNX session with strictly limited threads.
+    Used exclusively for simulating isolated Edge hardware profiles.
+
+    Args:
+        path (str): The path to the ONNX model file.
+        cores (int): The number of execution threads to restrict the model to.
+
+    Returns:
+        ort.InferenceSession: The ONNX runtime session.
+    """
     options = ort.SessionOptions()
     options.intra_op_num_threads = cores
     options.inter_op_num_threads = 1
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    
     model_file = os.path.join(path, "model.onnx") if os.path.isdir(path) else path
     return ort.InferenceSession(model_file, options, providers=["CPUExecutionProvider"])
 
+
 @st.cache_data
 def load_thesis_metrics():
+    """
+    Loads and caches the static benchmark results CSV.
+
+    Returns:
+        pd.DataFrame or None: The cleaned DataFrame containing benchmark results.
+    """
     if not os.path.exists(RESULTS_PATH):
         return None
         
@@ -146,29 +226,38 @@ def load_thesis_metrics():
     
 
 def compute_research_metrics(df):
-    # Dynamically find the correct latency column based on what Script 08 exported
+    """
+    Calculates derived efficiency and scaling metrics from the baseline results.
+
+    Args:
+        df (pd.DataFrame): The raw metrics dataframe.
+
+    Returns:
+        pd.DataFrame: A dataframe containing normalized column names and derived features.
+    """
+    # Dynamically find the correct latency column
     if "Empirical Time Complexity (Latency ms)" in df.columns:
         latency_col = "Empirical Time Complexity (Latency ms)"
     elif "Avg Latency (Overall) ms" in df.columns:
         latency_col = "Avg Latency (Overall) ms"
     else:
-        latency_col = "Avg Latency (ms)" # Fallback
+        latency_col = "Avg Latency (ms)" 
     
-    # Calculate Speedup Factor
+    # Calculate Speedup Factor relative to the slowest baseline model
     if not df.empty:
         baseline = df.loc[df[latency_col].idxmax()]
         df["Speedup_Factor"] = baseline[latency_col] / df[latency_col]
     else:
         df["Speedup_Factor"] = 1.0
 
+    # Calculate Performance Retention
     best_f1 = df["Macro F1 Score"].max()
     df["Performance_Retention"] = (df["Macro F1 Score"] / best_f1) * 100
     
-    # --- NEW EFFICIENCY METRICS ---
-    # Compute Efficiency: F1 score achieved per 1000ms of latency
+    # Compute Compute Efficiency: F1 score achieved per 1000ms of latency
     df["Compute_Efficiency"] = (df["Macro F1 Score"] / df[latency_col]) * 1000
     
-    # Storage Efficiency: F1 score achieved per MB of disk space
+    # Compute Storage Efficiency: F1 score achieved per MB of disk space
     if "Empirical Space Complexity (Storage MB)" in df.columns:
         df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Empirical Space Complexity (Storage MB)"]) * 1000
     elif "Model Size (MB)" in df.columns:
@@ -176,20 +265,38 @@ def compute_research_metrics(df):
     elif "Storage_MB" in df.columns:
         df["Storage_Efficiency"] = (df["Macro F1 Score"] / df["Storage_MB"]) * 1000
     else:
-        df["Storage_Efficiency"] = 0.0 # Fallback if missing
+        df["Storage_Efficiency"] = 0.0 
         
-    df = df.rename(columns={latency_col: "Latency_ms", "Macro F1 Score": "Macro_F1", "Model Name": "Model_Name"})
+    df = df.rename(columns={
+        latency_col: "Latency_ms", 
+        "Macro F1 Score": "Macro_F1", 
+        "Model Name": "Model_Name"
+    })
+    
     return df
 
 
 def plot_horizontal_metric(df, metric_col, title, format_str, highlight_color):
+    """
+    Generates a stylized Altair horizontal bar chart for a specific metric.
+
+    Args:
+        df (pd.DataFrame): The data containing the metric.
+        metric_col (str): The column name to plot.
+        title (str): The display title for the chart.
+        format_str (str): The numerical formatting string (e.g., '.2f').
+        highlight_color (str): The hex code used to highlight the Optimized model.
+
+    Returns:
+        alt.Chart: The compiled Altair visualization.
+    """
     domain = [
         "Model A (Base DistilmBERT)", 
         "Model B (DAPT-DistilmBERT)", 
         "Model C (XLM-R Base)", 
         "Model D (Optimized DAPT)"
     ]
-    # Models A and C = Grey. Models B and D = Green.
+    # Models A, B, and C = Grey. Model D = Highlight Color.
     range_colors = ['#34495e', '#34495e', '#34495e', '#2ecc71']
 
     base = alt.Chart(df).encode(
@@ -208,47 +315,89 @@ def plot_horizontal_metric(df, metric_col, title, format_str, highlight_color):
     
     return (bars + text).properties(title=alt.TitleParams(text=title, color='white'), height=220)
 
-# --- INFERENCE ENGINE ---
+
+# ==============================================================================
+# INFERENCE ENGINE
+# ==============================================================================
 def run_inference(txt, tk_obj, mdl_obj, eng_type, key_n, c_dict, dev):
+    """
+    Executes a single inference pass and measures execution latency.
+    Handles input preparation routing between PyTorch and ONNX execution providers.
+
+    Args:
+        txt (str): Input text string.
+        tk_obj (PreTrainedTokenizer): The tokenizer.
+        mdl_obj (PreTrainedModel or InferenceSession): The loaded model.
+        eng_type (str): "onnx" or "pytorch".
+        key_n (str): The model registry key.
+        c_dict (dict): The model configuration dictionary.
+        dev (str): The target device ("cpu" or "cuda").
+
+    Returns:
+        tuple: Raw logits and execution duration in milliseconds.
+    """
     if eng_type == "onnx":
         inputs = tk_obj(txt, return_tensors="np", padding=True, truncation=True, max_length=128)
+        
+        # Remove incompatible token IDs for ONNX DistilBERT
         if "token_type_ids" in inputs and ("distilmbert" in c_dict["name"].lower() or key_n == "Model D"):
             del inputs["token_type_ids"]
+            
         inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+        
         start = time.perf_counter()
         logits = mdl_obj.run(None, inputs)[0][0]
         dur = (time.perf_counter() - start) * 1000
+        
         return logits, dur
+        
     else:
         inputs = tk_obj(txt, return_tensors="pt", padding=True, truncation=True, max_length=128)
+        
+        # Remove incompatible token IDs for PyTorch DistilBERT variants
         if "token_type_ids" in inputs and ("distilmbert" in c_dict["name"].lower() or "model_a" in key_n.lower() or "model_b" in key_n.lower()):
             del inputs["token_type_ids"]
+            
         inputs = {k: v.to(dev) for k, v in inputs.items()}
+        
         start = time.perf_counter()
         with torch.no_grad():
             logits = mdl_obj(**inputs).logits[0].cpu().numpy()
         dur = (time.perf_counter() - start) * 1000
+        
         return logits, dur
 
-# --- SESSION STATE INITIALIZATION ---
+
+# ==============================================================================
+# SESSION STATE INITIALIZATION
+# ==============================================================================
 if 'edge_state' not in st.session_state: st.session_state.edge_state = None
 if 'diag_state' not in st.session_state: st.session_state.diag_state = None
 if 'batch_state' not in st.session_state: st.session_state.batch_state = None
 
-# --- UI LOGIC ---
+
+# ==============================================================================
+# UI LOGIC & VIEWS
+# ==============================================================================
 with st.sidebar:
     st.header("Evaluation Controls")
     mode = st.radio("Select View", ["Evaluation Dashboard", "Edge Emulation", "Diagnostic Inference", "Batch Simulation"])
     st.divider()
+    
     hw_info = platform.processor()
     compute_eng = "CPU Execution Provider"
     if torch.cuda.is_available():
         hw_info += f"\n\n**GPU Profile:**\n{torch.cuda.get_device_name(0)}"
         compute_eng += "\nCUDA Execution Provider"
+        
     st.info(f"**Hardware Profile:**\n{hw_info}\n\n**Compute Engines Available:**\n{compute_eng}")
 
 st.title("Sentiment Analysis Evaluation Framework")
 
+
+# ------------------------------------------------------------------------------
+# VIEW 1: EVALUATION DASHBOARD
+# ------------------------------------------------------------------------------
 if mode == "Evaluation Dashboard":
     st.header("Comparative Model Evaluation")
     df_static = load_thesis_metrics()
@@ -257,7 +406,6 @@ if mode == "Evaluation Dashboard":
         st.error("Metrics file missing. Execute quantitative benchmarking script first.")
     else:
         df_plot = df_static.drop_duplicates(subset=['Model Name']).copy()
-        
         df_plot = compute_research_metrics(df_plot)
         
         st.subheader("Key Performance Indicators by Architecture")
@@ -281,9 +429,14 @@ if mode == "Evaluation Dashboard":
             else:
                 st.info("Storage Efficiency data not available.")
       
+      
+# ------------------------------------------------------------------------------
+# VIEW 2: EDGE EMULATION
+# ------------------------------------------------------------------------------
 elif mode == "Edge Emulation":
     st.header("Live Edge Hardware Emulation")
     st.markdown("Enter code-switched text to dynamically benchmark it across 1 to 4 restricted CPU cores. This emulates inference limits for common low-end devices.")
+    
     text_input_edge = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.", key="edge_input")
     
     if st.button("Simulate Hardware Processing"):
@@ -296,6 +449,8 @@ elif mode == "Edge Emulation":
             
         st.session_state.edge_state['cleaned_text'] = text_to_process
         tokenizer, _, _ = load_one_model("Model D", device="cpu")
+        
+        # Tokenize and store mapping for UI display
         if tokenizer:
             tokens = tokenizer.tokenize(text_input_edge)
             token_ids = tokenizer.convert_tokens_to_ids(tokens)
@@ -318,9 +473,11 @@ elif mode == "Edge Emulation":
                 cores = profile["cores"]
                 device_name = f"{profile['name']} ({cores} Cores)"
                 
+                # Apply PyTorch core restrictions
                 torch.set_num_threads(cores)
                 
                 for key, conf in MODELS.items():
+                    # Handle ONNX Threading Logic
                     if conf["type"] == "onnx":
                         tokenizer, _, _ = load_one_model(key, "cpu")
                         if tokenizer is None:
@@ -330,16 +487,19 @@ elif mode == "Edge Emulation":
                         except Exception:
                             current_op += 1; continue
                         engine = "onnx"
+                    # Handle PyTorch Logic
                     else:
                         tokenizer, model, engine = load_one_model(key, "cpu")
                         if model is None:
                             current_op += 1; continue
                             
+                    # Warmup Execution
                     try:
                         run_inference("warmup", tokenizer, model, engine, key, conf, "cpu")
                     except Exception:
                         pass
                         
+                    # Target Execution Loop
                     latencies = []
                     final_logits = None
                     for _ in range(10): 
@@ -366,7 +526,7 @@ elif mode == "Edge Emulation":
                     
         st.session_state.edge_state['df'] = pd.DataFrame(results_data_edge)
 
-    # --- Render from Memory if Exists ---
+    # --- Render Edge State from Memory ---
     if st.session_state.edge_state is not None:
         st.subheader("1. Subword Tokenization")
         if 'tokens' in st.session_state.edge_state:
@@ -413,6 +573,10 @@ elif mode == "Edge Emulation":
         
         st.altair_chart(live_lat_chart + text_lat_edge, use_container_width=True)
 
+
+# ------------------------------------------------------------------------------
+# VIEW 3: DIAGNOSTIC INFERENCE
+# ------------------------------------------------------------------------------
 elif mode == "Diagnostic Inference":
     st.header("Latency and Classification Assessment (CPU vs GPU)")
     text_input = st.text_area("Input Code-Switched Text", "Ang ganda ng quality, sulit na sulit ang bayad! Mabilis pa shipping.", key="diag_input")
@@ -427,6 +591,7 @@ elif mode == "Diagnostic Inference":
         
         results_data = []
         progress_bar = st.progress(0)
+        
         devices_to_test = ["cpu"]
         if torch.cuda.is_available():
             devices_to_test.append("cuda")
@@ -442,11 +607,13 @@ elif mode == "Diagnostic Inference":
                         current_op += 1
                         continue
                         
+                    # Warmup Execution
                     try:
                         run_inference("warmup", tokenizer, model, engine, key, conf, device)
                     except Exception:
                         pass 
                     
+                    # Target Execution Loop
                     latencies = []
                     final_logits = None
                     for _ in range(20): 
@@ -476,7 +643,7 @@ elif mode == "Diagnostic Inference":
         st.session_state.diag_state['df'] = pd.DataFrame(results_data)
         st.session_state.diag_state['results_data'] = results_data
 
-    # --- Render from Memory if Exists ---
+    # --- Render Diagnostic State from Memory ---
     if st.session_state.diag_state is not None:
         st.subheader("1. Subword Tokenization")
         if 'tokens' in st.session_state.diag_state:
@@ -531,9 +698,10 @@ elif mode == "Diagnostic Inference":
             st.markdown("**Prediction Confidence (CPU Runtime)**")
             all_probs = []
             cpu_results = [res for res in results_data if res["Hardware"] == "CPU"]
+            
+            # Map output probabilities to categorical sentiments
             for res in cpu_results:
                 if res["Probs"] is not None:
-                    # 0=Negative, 1=Neutral, 2=Positive mapping
                     all_probs.append({"Model": res["Model"], "Sentiment": "Negative", "Probability": float(res["Probs"][0])})
                     all_probs.append({"Model": res["Model"], "Sentiment": "Neutral", "Probability": float(res["Probs"][1])})
                     all_probs.append({"Model": res["Model"], "Sentiment": "Positive", "Probability": float(res["Probs"][2])})
@@ -542,10 +710,10 @@ elif mode == "Diagnostic Inference":
                 df_probs = pd.DataFrame(all_probs)
                 sentiment_order = ['Negative', 'Neutral', 'Positive']
                 
-                # Grouped Horizontal Bar Chart using yOffset for high readability
+                # Grouped Horizontal Bar Chart for Confidence Spread
                 chart_conf = alt.Chart(df_probs).mark_bar(cornerRadiusEnd=3, height=18).encode(
                     y=alt.Y('Model:N', title=None, axis=alt.Axis(labelColor='white', labelFontSize=12, labelFontWeight='bold')),
-                    yOffset='Sentiment:N', # This creates the side-by-side grouping
+                    yOffset='Sentiment:N', 
                     x=alt.X('Probability:Q', title='Confidence level', axis=alt.Axis(format='%', labelColor='white', titleColor='white')),
                     color=alt.Color('Sentiment:N', 
                         scale=alt.Scale(domain=sentiment_order, range=['#e74c3c', '#95a5a6', '#2ecc71']), 
@@ -564,6 +732,9 @@ elif mode == "Diagnostic Inference":
                 st.altair_chart(chart_conf + text_labels, use_container_width=True)
 
                 
+# ------------------------------------------------------------------------------
+# VIEW 4: BATCH SIMULATION
+# ------------------------------------------------------------------------------
 elif mode == "Batch Simulation":
     st.header("Batch Inference Simulation")
     st.write("Execute large-scale inference to simulate real-world data processing, measure throughput latency, and evaluate classification distribution.")
@@ -607,6 +778,7 @@ elif mode == "Batch Simulation":
         if st.button("Execute Batch Simulation", type="primary"):
             st.session_state.batch_state = {}
             tokenizer, model, engine = load_one_model(selected_model, device=hardware_target)
+            
             if model is None:
                 st.error("Model failed to load.")
             else:
@@ -615,6 +787,7 @@ elif mode == "Batch Simulation":
                 total_samples_attempted = len(df_test)
                 skipped_samples = 0
                 
+                # Warmup
                 try:
                     run_inference("warmup", tokenizer, model, engine, selected_model, MODELS[selected_model], hardware_target)
                 except Exception:
@@ -624,6 +797,7 @@ elif mode == "Batch Simulation":
                     for step, (original_idx, row) in enumerate(df_test.iterrows()):
                         raw_text = str(row[text_column])
                         
+                        # Apply Data Prep Filter
                         if enable_preprocessing:
                             processed_text = apply_thesis_preprocessing(raw_text)
                             if not processed_text:
@@ -634,6 +808,7 @@ elif mode == "Batch Simulation":
                         else:
                             text_input = raw_text
                         
+                        # Execute Inference Core
                         logits, duration = run_inference(text_input, tokenizer, model, engine, selected_model, MODELS[selected_model], hardware_target)
                         probs = softmax(logits)
                         pred_class = np.argmax(probs)
@@ -651,16 +826,18 @@ elif mode == "Batch Simulation":
                         progress_bar.progress((step + 1) / total_samples_attempted)
                 
                 df_results = pd.DataFrame(results)
+                
+                # Update Session State Dictionary
                 st.session_state.batch_state['df'] = df_results
                 st.session_state.batch_state['total_samples'] = len(results)
                 st.session_state.batch_state['skipped'] = skipped_samples
                 st.session_state.batch_state['selected_model'] = selected_model
                 
-                # --- NEW: SELECT RANDOM SAMPLES FOR TRACE ---
+                # Randomly trace and sample up to 5 entries for UX transparency
                 if not df_results.empty and show_live_trace:
                     st.session_state.batch_state['trace_df'] = df_results.sample(n=min(5, len(df_results))).copy()
 
-        # --- Render from Memory if Exists ---
+        # --- Render Batch State from Memory ---
         if st.session_state.batch_state is not None:
             df_results = st.session_state.batch_state['df']
             total_samples = st.session_state.batch_state['total_samples']
@@ -669,7 +846,6 @@ elif mode == "Batch Simulation":
             
             st.success("Simulation Complete.")
             
-            # --- RENDER RANDOMIZED TRACE ---
             if 'trace_df' in st.session_state.batch_state:
                 st.subheader("Randomized Execution Trace")
                 for _, row in st.session_state.batch_state['trace_df'].iterrows():
@@ -689,6 +865,8 @@ elif mode == "Batch Simulation":
                 st.warning(f"{skipped_samples} sample(s) were skipped due to the gibberish filter or insufficient word count.")
             
             st.markdown("### Step 3: Simulation Metrics")
+            
+            # Metric Computations
             total_seconds = df_results['Latency_ms'].sum() / 1000 if total_samples > 0 else 0
             pos_count = len(df_results[df_results['Predicted_Class'] == 'Positive']) if total_samples > 0 else 0
             pos_rate = (pos_count / total_samples) * 100 if total_samples > 0 else 0
@@ -727,6 +905,7 @@ elif mode == "Batch Simulation":
             display_df = df_results.copy()
             display_df["Confidence"] = display_df["Confidence"].apply(lambda x: f"{x*100:.1f}%")
             display_df["Latency_ms"] = display_df["Latency_ms"].apply(lambda x: f"{x:.2f} ms")
+            
             st.dataframe(display_df, width="stretch", height=300)
             
             csv_data = df_results.to_csv(index=False).encode('utf-8')

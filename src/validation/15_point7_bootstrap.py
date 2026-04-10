@@ -1,9 +1,18 @@
-# FILE: 15_point7_bootstrap.py
+"""
+Statistical Validation and Bootstrap Hypothesis Testing Script.
+
+This script evaluates the statistical significance of model improvements.
+It extracts predictions from a baseline model and a domain-adapted model.
+It then executes a bootstrap hypothesis test over 1000 sampling iterations.
+Finally, it applies a Wilcoxon signed-rank test and exports the findings.
+"""
+
 import os
+import gc
+
 import pandas as pd
 import numpy as np
 import torch
-import gc
 from scipy.stats import wilcoxon
 from datasets import Dataset
 from sklearn.metrics import f1_score
@@ -15,10 +24,13 @@ from transformers import (
     DataCollatorWithPadding
 )
 
+# ==============================================================================
 # PATH CONFIGURATION
+# ==============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
+
 FIRECS_DIR = os.path.join(BASE_DIR, 'data', '03_processed', 'FiReCS_Final')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 REPORTS_DIR = os.path.join(BASE_DIR, 'reports', 'metrics')
@@ -32,12 +44,30 @@ BASE_TOKENIZER = "distilbert-base-multilingual-cased"
 # Use seed 42 for consistency with the rest of the project
 set_seed(42)
 
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 def clear_memory():
+    """
+    Forces garbage collection and clears the CUDA memory cache.
+    """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+
 def get_predictions(model_path, dataset):
+    """
+    Extracts predictions from a specified sequence classification model.
+
+    Args:
+        model_path (str): The directory path containing the model weights.
+        dataset (Dataset): The Hugging Face dataset for evaluation.
+
+    Returns:
+        tuple: An array of predicted labels and an array of true labels.
+    """
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model not found at {model_path}")
         
@@ -47,13 +77,13 @@ def get_predictions(model_path, dataset):
         problem_type="single_label_classification"
     )
     
-    # SYNCED: Tokenization without hard padding to allow dynamic collator control
+    # Tokenize data without hard padding to allow dynamic collator control
     def tokenize(batch):
         return tokenizer(batch['text'], truncation=True, max_length=128)
     
     tokenized_ds = dataset.map(tokenize, batched=True)
     
-    # SYNCED: Explicitly use DataCollatorWithPadding to prevent sequence length errors
+    # Use DataCollatorWithPadding to prevent sequence length errors
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
@@ -70,16 +100,40 @@ def get_predictions(model_path, dataset):
     
     return y_pred, preds_output.label_ids
 
+
 def normalize_columns(df):
+    """
+    Standardizes dataset column names and drops invalid rows.
+
+    Args:
+        df (pd.DataFrame): The raw test dataframe.
+
+    Returns:
+        pd.DataFrame: A cleaned dataframe containing valid text and label columns.
+    """
     if 'text' not in df.columns and 'review' in df.columns:
         df = df.rename(columns={'review': 'text'})
     if 'label' not in df.columns and 'sentiment' in df.columns:
         df = df.rename(columns={'sentiment': 'label'})
+        
     df = df.dropna(subset=['text', 'label'])
     df['label'] = df['label'].astype(int)
+    
     return df
 
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 def main():
+    """
+    Executes the statistical validation pipeline.
+
+    This function extracts model predictions on the test set. It then runs 
+    a bootstrap sampling method over 1000 iterations to calculate confidence 
+    intervals. Finally, it applies a Wilcoxon signed-rank test to determine 
+    statistical significance and saves the results to a CSV file.
+    """
     print("=== STEP 1: EXTRACTING PREDICTIONS FOR STATISTICAL TEST ===")
     test_path = os.path.join(FIRECS_DIR, 'test.csv')
     
@@ -87,6 +141,7 @@ def main():
         print(f"[ERROR] Test set missing at {test_path}")
         return
 
+    # Prepare the test dataset
     test_df = normalize_columns(pd.read_csv(test_path))
     test_df['label'] = test_df['label'].astype(int)
     test_ds = Dataset.from_pandas(test_df)
@@ -111,7 +166,7 @@ def main():
     np.random.seed(42) 
     
     for i in range(n_iterations):
-        # Resample with replacement (Standard Bootstrap Method)
+        # Resample with replacement using the standard bootstrap method
         indices = np.random.randint(0, n_size, size=n_size)
         
         y_true_boot = y_true[indices]
@@ -129,11 +184,14 @@ def main():
         if (i + 1) % 200 == 0:
             print(f"   -> Completed {i + 1} iterations...")
 
-    # Calculate Standard Deviation
+    # --------------------------------------------------------------------------
+    # STATISTICAL CALCULATIONS
+    # --------------------------------------------------------------------------
+    # Calculate standard deviations
     std_dev_model_a = np.std(scores_a)
     std_dev_model_b = np.std(scores_b)
 
-    # Calculate 95% Confidence Intervals (2.5th to 97.5th percentile)
+    # Calculate 95 percent confidence intervals (2.5th to 97.5th percentile)
     ci_lower_a, ci_upper_a = np.percentile(scores_a, [2.5, 97.5])
     ci_lower_b, ci_upper_b = np.percentile(scores_b, [2.5, 97.5])
     
@@ -153,7 +211,10 @@ def main():
     else:
         print("Result: NOT SIGNIFICANT. The margin is within expected noise.")
 
-    # Exporting results for Chapter 4 Tables
+    # --------------------------------------------------------------------------
+    # EXPORT RESULTS
+    # --------------------------------------------------------------------------
+    # Export results for documentation tables
     results_df = pd.DataFrame([{
         "Model_A_Std_Dev": round(std_dev_model_a, 4),
         "Model_B_Std_Dev": round(std_dev_model_b, 4),
@@ -167,6 +228,7 @@ def main():
     csv_path = os.path.join(REPORTS_DIR, 'bootstrap_results.csv')
     results_df.to_csv(csv_path, index=False)
     print(f"\n[SUCCESS] Statistical validation results saved to {csv_path}")
+
 
 if __name__ == "__main__":
     main()

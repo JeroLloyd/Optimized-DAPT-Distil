@@ -1,11 +1,21 @@
-# FILE: 13_ablation_study.py
+"""
+Ablation Study Execution Script.
+
+This module isolates the performance impact of authentic data. It extracts 
+authentic text samples, performs domain-adaptive pre-training (DAPT) on this 
+subset, and conducts a fine-tuning grid search. Finally, it evaluates the 
+champion model on a consistent test set to benchmark the ablation results.
+"""
+
 import os
-import shutil
-import pandas as pd
-import torch
-import time
-import numpy as np
 import gc
+import sys
+import time
+import shutil
+
+import torch
+import numpy as np
+import pandas as pd
 from datasets import load_dataset, Dataset, DatasetDict
 from sklearn.metrics import accuracy_score, f1_score
 from transformers import (
@@ -14,21 +24,33 @@ from transformers import (
     TrainingArguments, Trainer, EarlyStoppingCallback, set_seed
 )
 
-# --- DETERMINISTIC SEED LOCK ---
+# ==============================================================================
+# DETERMINISTIC SEED LOCK
+# ==============================================================================
 def lock_environmental_seeds(seed=42):
+    """
+    Secures all random number generators to ensure reproducible training runs.
+
+    Args:
+        seed (int): The numerical seed value applied across all libraries.
+    """
     os.environ["PYTHONHASHSEED"] = str(seed)
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     set_seed(seed)
+    
     if torch.cuda.is_available():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
 lock_environmental_seeds(42)
 
-# --- PATH CONFIGURATION ---
+# ==============================================================================
+# PATH CONFIGURATION
+# ==============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.dirname(SCRIPT_DIR)
 BASE_DIR = os.path.dirname(SRC_DIR)
+
 INTERIM_DIR = os.path.join(BASE_DIR, 'data', '02_interim')
 PROCESSED_DIR = os.path.join(BASE_DIR, 'data', '03_processed')
 FIRECS_DIR = os.path.join(PROCESSED_DIR, 'FiReCS_Final')
@@ -43,21 +65,51 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # SYNCED SEARCH RATES FROM REFINED STAGE 2
 UNIVERSAL_SEARCH_RATES = [1e-5, 1.2e-5, 1.5e-5]
 
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 def compute_metrics(eval_pred):
+    """
+    Calculates evaluation metrics for sequence classification.
+
+    Args:
+        eval_pred (tuple): A tuple containing model logits and true labels.
+
+    Returns:
+        dict: A dictionary containing accuracy and macro F1 score.
+    """
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
     acc = accuracy_score(labels, predictions)
     f1 = f1_score(labels, predictions, average='macro')
     return {"accuracy": acc, "macro_f1": f1}
 
+
 def clear_memory():
+    """
+    Forces garbage collection and clears the CUDA memory cache.
+    """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-# --- EQUITABLE LLRD LOGIC (Matches Stage 2 perfectly) ---
+
 def get_optimizer_grouped_parameters(model, base_lr, decay_factor=0.95, weight_decay=0.01):
-    """Assigns decaying learning rates to model layers."""
+    """
+    Assigns dynamically decaying learning rates to model layers. 
+    This creates higher learning rates near the classifier head and lower rates 
+    near the embedding layers.
+
+    Args:
+        model (PreTrainedModel): The Hugging Face model instance.
+        base_lr (float): The starting learning rate for the classifier head.
+        decay_factor (float): The multiplier used to decrease the learning rate.
+        weight_decay (float): The weight decay applied to the parameters.
+
+    Returns:
+        list: A list of parameter groups formatted for the PyTorch optimizer.
+    """
     is_distilbert = hasattr(model, "distilbert")
     layers = model.distilbert.transformer.layer if is_distilbert else model.roberta.encoder.layer
     embeddings = model.distilbert.embeddings if is_distilbert else model.roberta.embeddings
@@ -65,14 +117,14 @@ def get_optimizer_grouped_parameters(model, base_lr, decay_factor=0.95, weight_d
     
     params = []
     
-    # 1. Head (Full LR)
+    # 1. Classifier Head (Full Learning Rate)
     params.append({
         "params": [p for n, p in model.named_parameters() if "classifier" in n or "pre_classifier" in n],
         "weight_decay": weight_decay,
         "lr": base_lr,
     })
     
-    # 2. Layers (Decaying)
+    # 2. Transformer Layers (Decaying Learning Rate)
     for i in range(num_layers - 1, -1, -1):
         params.append({
             "params": layers[i].parameters(),
@@ -80,21 +132,37 @@ def get_optimizer_grouped_parameters(model, base_lr, decay_factor=0.95, weight_d
             "lr": base_lr * (decay_factor ** (num_layers - i)),
         })
         
-    # 3. Embeddings (Protected)
+    # 3. Embeddings (Protected Minimum Learning Rate)
     params.append({
         "params": embeddings.parameters(),
         "weight_decay": weight_decay,
         "lr": base_lr * (decay_factor ** (num_layers + 1)),
     })
+    
     return params
 
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 def main():
+    """
+    Executes the ablation study pipeline. 
+    
+    It handles authentic data isolation, domain-adaptive pre-training, 
+    fine-tuning grid search, and final test set evaluation.
+    """
     print("=== CHECKING DAPT PROGRESS ===")
+    
+    # --------------------------------------------------------------------------
+    # 1. AUTHENTIC DATA ISOLATION & DAPT
+    # --------------------------------------------------------------------------
     if not os.path.exists(DAPT_OUT) or not os.listdir(DAPT_OUT):
         print("\n=== STEP 1: ISOLATING AUTHENTIC DATA ===")
         lazada_csv = os.path.join(INTERIM_DIR, "cleaned_lazada_data.csv")
         df_auth = pd.read_csv(lazada_csv)
         
+        # Write authentic text data to a dedicated file
         with open(AUTH_TXT, 'w', encoding='utf-8') as f:
             for text in df_auth['final_text'].dropna():
                 f.write(text + "\n")
@@ -111,7 +179,7 @@ def main():
         
         dapt_model = AutoModelForMaskedLM.from_pretrained("distilbert-base-multilingual-cased")
         
-        # SYNCED WITH STAGE 1 (10 Epochs, LR 3e-5, Accumulation 2)
+        # Configure training parameters to match Stage 1 perfectly
         dapt_args = TrainingArguments(
             output_dir=DAPT_OUT, 
             num_train_epochs=10, 
@@ -136,6 +204,9 @@ def main():
     else:
         print(f"[SKIP] DAPT already completed. Model found at: {DAPT_OUT}")
 
+    # --------------------------------------------------------------------------
+    # 2. AUTOMATED FINE-TUNING GRID SEARCH
+    # --------------------------------------------------------------------------
     print("\n=== STEP 3: AUTOMATED FINE-TUNING GRID SEARCH (ABLATION) ===")
     tokenizer = AutoTokenizer.from_pretrained(DAPT_OUT)
     
@@ -157,6 +228,7 @@ def main():
     best_lr = None
     best_temp_dir = ""
 
+    # Iterate through target learning rates to find the optimal configuration
     for lr in UNIVERSAL_SEARCH_RATES:
         print(f"\n[TESTING ABLATION] LR: {lr} | Applying Precision LLRD (0.95)")
         temp_dir = f"{FT_OUT}_TEMP_LR_{lr}"
@@ -168,10 +240,9 @@ def main():
             DAPT_OUT, num_labels=3, problem_type="single_label_classification"
         )
         
-        # SYNCED OPTIMIZER: 0.95 factor, 0.01 weight decay
+        # Construct optimizer with layer-wise learning rate decay
         optimizer = torch.optim.AdamW(get_optimizer_grouped_parameters(ft_model, lr, decay_factor=0.95, weight_decay=0.01), lr=lr)
         
-        # SYNCED FT ARGS: Batch size 16 to match Stage 2 exactly
         ft_args = TrainingArguments(
             output_dir=temp_dir, 
             evaluation_strategy="epoch", 
@@ -195,7 +266,7 @@ def main():
             eval_dataset=tokenized_ft["validation"], data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
             compute_metrics=compute_metrics, 
             optimizers=(optimizer, None),
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=2)] # SYNCED: Patience 2
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
         )
         
         trainer.train()
@@ -213,31 +284,46 @@ def main():
         del ft_model, trainer
         clear_memory()
 
+    # --------------------------------------------------------------------------
+    # 3. CHAMPION SELECTION AND CLEANUP
+    # --------------------------------------------------------------------------
     print(f"\n[WINNER] Best Ablation LR: {best_lr} (F1: {best_f1:.4f})")
-    if os.path.exists(FT_OUT): shutil.rmtree(FT_OUT)
+    
+    if os.path.exists(FT_OUT): 
+        shutil.rmtree(FT_OUT)
+        
     shutil.copytree(best_temp_dir, FT_OUT)
     
+    # Remove inferior temporary directories
     for lr in UNIVERSAL_SEARCH_RATES:
         td = f"{FT_OUT}_TEMP_LR_{lr}"
-        if os.path.exists(td): shutil.rmtree(td)
+        if os.path.exists(td): 
+            shutil.rmtree(td)
 
+    # --------------------------------------------------------------------------
+    # 4. FINAL TEST SET EVALUATION
+    # --------------------------------------------------------------------------
     print("\n=== STEP 4: CONSISTENT TEST SET EVALUATION ===")
     test_df = pd.read_csv(os.path.join(FIRECS_DIR, 'test.csv'))
     test_df['label'] = test_df['label'].astype(int)
+    
     test_ds = Dataset.from_pandas(test_df[['review', 'label']].rename(columns={'review':'text'}))
     tokenized_test = test_ds.map(lambda x: tokenizer(x["text"], truncation=True, max_length=128), batched=True)
     
     final_model = AutoModelForSequenceClassification.from_pretrained(FT_OUT)
+    
     final_trainer = Trainer(
         model=final_model, tokenizer=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics
     )
     
+    # Extract performance metrics
     test_metrics = final_trainer.evaluate(tokenized_test)
     macro_f1_test = test_metrics['eval_macro_f1']
     accuracy_test = test_metrics['eval_accuracy']
     
+    # Export results to CSV
     results_df = pd.DataFrame([{
         "Model": "Authentic-Only DAPT (Ablation)",
         "Macro F1 Score": round(macro_f1_test, 4),
@@ -248,7 +334,9 @@ def main():
     
     csv_path = os.path.join(REPORTS_DIR, 'ablation_metrics.csv')
     results_df.to_csv(csv_path, index=False)
+    
     print(f"Ablation metrics saved to: {csv_path}")
+
 
 if __name__ == "__main__":
     main()
