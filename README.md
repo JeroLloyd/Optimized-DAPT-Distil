@@ -1,5 +1,7 @@
 # Optimized-DAPT-Distil - Installation Guide
 
+https://github.com/JeroLloyd/Optimized-DAPT-Distil/tree/main
+
 This folder contains all the necessary files to replicate and execute the Optimized Domain-Adaptive Pre-Training and Knowledge Distillation framework.
 
 ## Prerequisites
